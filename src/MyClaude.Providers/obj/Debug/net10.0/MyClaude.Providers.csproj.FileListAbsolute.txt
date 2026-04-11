@@ -1,0 +1,12 @@
+Q:\HYProjects\my-claude\src\MyClaude.Providers\bin\Debug\net10.0\MyClaude.Providers.deps.json
+Q:\HYProjects\my-claude\src\MyClaude.Providers\bin\Debug\net10.0\MyClaude.Providers.dll
+Q:\HYProjects\my-claude\src\MyClaude.Providers\bin\Debug\net10.0\MyClaude.Providers.pdb
+Q:\HYProjects\my-claude\src\MyClaude.Providers\obj\Debug\net10.0\MyClaude.Providers.csproj.AssemblyReference.cache
+Q:\HYProjects\my-claude\src\MyClaude.Providers\obj\Debug\net10.0\MyClaude.Providers.GeneratedMSBuildEditorConfig.editorconfig
+Q:\HYProjects\my-claude\src\MyClaude.Providers\obj\Debug\net10.0\MyClaude.Providers.AssemblyInfoInputs.cache
+Q:\HYProjects\my-claude\src\MyClaude.Providers\obj\Debug\net10.0\MyClaude.Providers.AssemblyInfo.cs
+Q:\HYProjects\my-claude\src\MyClaude.Providers\obj\Debug\net10.0\MyClaude.Providers.csproj.CoreCompileInputs.cache
+Q:\HYProjects\my-claude\src\MyClaude.Providers\obj\Debug\net10.0\MyClaude.Providers.dll
+Q:\HYProjects\my-claude\src\MyClaude.Providers\obj\Debug\net10.0\refint\MyClaude.Providers.dll
+Q:\HYProjects\my-claude\src\MyClaude.Providers\obj\Debug\net10.0\MyClaude.Providers.pdb
+Q:\HYProjects\my-claude\src\MyClaude.Providers\obj\Debug\net10.0\ref\MyClaude.Providers.dll
