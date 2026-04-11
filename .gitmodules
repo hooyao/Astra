@@ -1,0 +1,6 @@
+[submodule "refs/claude-reviews-claude"]
+	path = refs/claude-reviews-claude
+	url = https://github.com/hooyao/claude-reviews-claude.git
+[submodule "refs/claude-code-compilable"]
+	path = refs/claude-code-compilable
+	url = https://github.com/hooyao/claude-code-compilable.git
