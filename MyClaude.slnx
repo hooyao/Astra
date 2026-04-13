@@ -1,7 +1,0 @@
-<Solution>
-  <Folder Name="/src/">
-    <Project Path="src/MyClaude.Cli/MyClaude.Cli.csproj" />
-    <Project Path="src/MyClaude.Core/MyClaude.Core.csproj" />
-    <Project Path="src/MyClaude.Providers/MyClaude.Providers.csproj" />
-  </Folder>
-</Solution>

@@ -1,10 +1,13 @@
 using Microsoft.Extensions.Configuration;
-using MyClaude.Core;
-using MyClaude.Providers;
+using Astra.Cli;
+using Astra.Cli.Tools;
+using Astra.Core;
+using Astra.Providers;
 
 var config = new ConfigurationBuilder()
     .SetBasePath(AppContext.BaseDirectory)
     .AddJsonFile("appsettings.json")
+    .AddJsonFile("appsettings.Development.json", optional: true)
     .Build();
 
 var llmConfig = new LlmConfig
@@ -17,5 +20,7 @@ var llmConfig = new LlmConfig
 };
 
 using var chatClient = ChatClientFactory.Create(llmConfig);
-var app = new AgentApp(chatClient);
-await app.RunAsync(args);
+
+ITool[] tools = [new GetCurrentTimeTool()];
+var app = new AgentApp(chatClient, tools);
+await app.RunAsync();

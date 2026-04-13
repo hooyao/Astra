@@ -1,6 +1,7 @@
 ## .NET
 bin/
 obj/
+publish/
 *.user
 *.suo
 *.cache
@@ -10,12 +11,18 @@ obj/
 .vs/
 .idea/
 *.swp
+*.sln.DotSettings.user
 
 ## NuGet
 *.nupkg
 packages/
 
+## Secrets
+appsettings.*.json
+!appsettings.json
+
 ## OS
 Thumbs.db
 Desktop.ini
 .DS_Store
+

@@ -4,7 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A state-of-the-art general-purpose agent framework in C#, inspired by the Claude Code architecture (reference: `Q:\HYProjects\claude-code-compilable`). The primary goal is a **general-purpose agent** that can be specialized into domain-specific agents (coding, research, automation). The coding agent is the first specialization but the framework must remain domain-agnostic.
+A state-of-the-art general-purpose agent framework in C#, inspired by the Claude Code architecture. The primary goal is a **general-purpose agent** that can be specialized into domain-specific agents (coding, research, automation). The coding agent is the first specialization but the framework must remain domain-agnostic.
+
+Reference materials (git submodules under `refs/`):
+- **Architecture analysis**: `refs/claude-reviews-claude/` — 17-chapter deep dive into Claude Code internals
+- **Source reference**: `refs/claude-code-compilable/` — compilable TypeScript source of Claude Code
 
 ## Language Policy
 
@@ -24,16 +28,21 @@ dotnet build
 dotnet test
 
 # Run a single test project
-dotnet test tests/MyClaude.Core.Tests
+dotnet test tests/Astra.Core.Tests
 
 # Run a specific test by filter
 dotnet test --filter "FullyQualifiedName~ToolOrchestration"
 
 # Run the CLI agent
-dotnet run --project src/MyClaude.Cli
+dotnet run --project src/Astra.Cli
 
-# Build release
-dotnet publish src/MyClaude.Cli -c Release -o dist/
+# Build release (managed)
+dotnet publish src/Astra.Cli -c Release -o dist/
+
+# Build release (Native AOT, single exe, no runtime dependency)
+# Requires: Visual Studio C++ build tools (vswhere.exe must be on PATH)
+dotnet publish src/Astra.Cli -c Release -r win-x64
+# Output: src/Astra.Cli/bin/Release/net10.0/win-x64/publish/Astra.exe
 ```
 
 ## Architecture
@@ -49,22 +58,22 @@ dotnet publish src/MyClaude.Cli -c Release -o dist/
 ### Solution Structure
 
 ```
-MyClaude.sln
+Astra.sln
 ├── src/
-│   ├── MyClaude.Core/              # Agent loop, tool system, context management
-│   ├── MyClaude.Tools/             # Built-in tool implementations
-│   ├── MyClaude.Providers/         # LLM API providers (Anthropic, OpenAI-compat, etc.)
-│   ├── MyClaude.Permissions/       # Permission rules, approval pipeline
-│   ├── MyClaude.Mcp/               # Model Context Protocol client
-│   ├── MyClaude.Plugins/           # Plugin discovery, loading, lifecycle
-│   ├── MyClaude.Cli/               # CLI entry point and terminal UI
-│   └── MyClaude.Sdk/               # Public SDK for embedding agents
+│   ├── Astra.Core/              # Agent loop, tool system, context management
+│   ├── Astra.Tools/             # Built-in tool implementations
+│   ├── Astra.Providers/         # LLM API providers (Anthropic, OpenAI-compat, etc.)
+│   ├── Astra.Permissions/       # Permission rules, approval pipeline
+│   ├── Astra.Mcp/               # Model Context Protocol client
+│   ├── Astra.Plugins/           # Plugin discovery, loading, lifecycle
+│   ├── Astra.Cli/               # CLI entry point and terminal UI
+│   └── Astra.Sdk/               # Public SDK for embedding agents
 ├── tests/
-│   ├── MyClaude.Core.Tests/
-│   ├── MyClaude.Tools.Tests/
-│   └── MyClaude.Integration.Tests/
+│   ├── Astra.Core.Tests/
+│   ├── Astra.Tools.Tests/
+│   └── Astra.Integration.Tests/
 └── samples/
-    └── MyClaude.Samples/           # Example agent configurations
+    └── Astra.Samples/           # Example agent configurations
 ```
 
 ### The Agent Loop (Core)
@@ -199,6 +208,15 @@ Provider packages:
 | Ollama / local | `OllamaSharp` | Verified |
 
 If a provider package is not AOT-safe, write a thin AOT-compatible wrapper around its HTTP API rather than pulling in the non-AOT package. All core agent code must remain AOT-clean.
+
+## Architecture Reference
+
+When implementing a subsystem, read `refs/architecture-index.md` for a comprehensive chapter-by-module mapping. That index maps each Astra module to the relevant Claude Code analysis chapters with key design decisions, critical functions, and anti-patterns. Read it on-demand — do not keep it in context permanently.
+
+## Development Methodology
+
+- **Learn from Claude Code, don't copy it.** Claude Code's architecture analysis (`refs/`) is a reference for design decisions and patterns, not a blueprint. Avoid its accumulated tech debt and over-complexity. Design our architecture pragmatically based on actual needs.
+- **Every incremental step must produce a working, runnable artifact** — not stubs or skeletons. If it compiles but doesn't do anything useful, it's not done.
 
 ## Coding Conventions
 

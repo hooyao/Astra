@@ -1,4 +1,4 @@
-namespace MyClaude.Providers;
+namespace Astra.Providers;
 
 public sealed class LlmConfig
 {

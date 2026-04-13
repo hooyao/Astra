@@ -1,0 +1,76 @@
+using Astra.Core;
+using Microsoft.Extensions.AI;
+
+namespace Astra.Cli;
+
+/// <summary>
+/// Console REPL — one of many possible consumers of AgentLoop's event stream.
+/// The same AgentLoop can be driven by HTTP, WebSocket, or any other transport.
+/// </summary>
+public sealed class AgentApp(IChatClient chatClient, IReadOnlyList<ITool> tools)
+{
+    public async Task RunAsync(CancellationToken ct = default)
+    {
+        Console.InputEncoding = System.Text.Encoding.UTF8;
+        Console.OutputEncoding = System.Text.Encoding.UTF8;
+        Console.WriteLine("Astra Agent");
+        Console.WriteLine("Type a message to start, or 'exit' to quit.\n");
+
+        var loop = new AgentLoop(chatClient, tools, "You are a helpful assistant. Use tools when appropriate.");
+
+        while (!ct.IsCancellationRequested)
+        {
+            Console.Write("> ");
+            var input = Console.ReadLine();
+            if (input is null or "exit") break;
+            if (string.IsNullOrWhiteSpace(input)) continue;
+
+            var needsNewline = false;
+            try
+            {
+                await foreach (var evt in loop.SubmitAsync(input, ct))
+                {
+                    switch (evt)
+                    {
+                        case AgentEvent.TextDelta { Text: var text }:
+                            Console.Write(text);
+                            needsNewline = true;
+                            break;
+                        case AgentEvent.ToolUse { ToolName: var name }:
+                            if (needsNewline) { Console.WriteLine(); needsNewline = false; }
+                            Console.ForegroundColor = ConsoleColor.DarkGray;
+                            Console.WriteLine($"  [tool: {name}]");
+                            Console.ResetColor();
+                            break;
+                        case AgentEvent.ToolResult { ToolName: var name, Result: var result }:
+                            var preview = result.Length > 200 ? result[..200] + "..." : result;
+                            Console.ForegroundColor = ConsoleColor.DarkGray;
+                            Console.WriteLine($"  [result: {preview}]");
+                            Console.ResetColor();
+                            break;
+                        case AgentEvent.Error { Message: var msg }:
+                            if (needsNewline) { Console.WriteLine(); needsNewline = false; }
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine($"  Error: {msg}");
+                            Console.ResetColor();
+                            break;
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                if (needsNewline) Console.WriteLine();
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine($"\nError: {ex.Message}");
+                Console.ResetColor();
+            }
+
+            if (needsNewline) Console.WriteLine();
+            Console.WriteLine();
+        }
+    }
+}
