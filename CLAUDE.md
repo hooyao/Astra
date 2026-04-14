@@ -8,7 +8,7 @@ A state-of-the-art general-purpose agent framework in C#, inspired by the Claude
 
 Reference materials (git submodules under `refs/`):
 - **Architecture analysis**: `refs/claude-reviews-claude/` — 17-chapter deep dive into Claude Code internals
-- **Source reference**: `refs/claude-code-compilable/` — compilable TypeScript source of Claude Code
+- **Source reference**: `refs/claude-code-sourcemap/restored-src/src/` — original TypeScript source of Claude Code (v2.1.88)
 
 ## Language Policy
 

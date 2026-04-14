@@ -1,7 +1,7 @@
 # Architecture Reference Index
 
 Maps each MyClaude module to the Claude Code analysis chapters in `refs/claude-reviews-claude/architecture/`.
-Source code reference in `refs/claude-code-compilable/`.
+Source code reference in `refs/claude-code-sourcemap/restored-src/src/`.
 
 ---
 
