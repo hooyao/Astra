@@ -94,18 +94,25 @@ public sealed class AgentLoop(IChatClient chatClient, IReadOnlyList<ITool> tools
         }
     }
 
-    /// <summary>Adapts an ITool to AIFunction for the M.E.AI wire protocol.</summary>
+    /// <summary>
+    /// Adapts an ITool to AIFunction for the M.E.AI wire protocol — advertisement only
+    /// (Name/Description/JsonSchema serialized into the request). Execution is NOT routed
+    /// through here: the agent loop dispatches tools manually so that permission checks,
+    /// read/write partitioning, and compaction hooks all have a seam to attach to.
+    /// </summary>
     private sealed class ToolAIFunction(ITool tool) : AIFunction
     {
         public override string Name => tool.Name;
         public override string Description => tool.Description;
         public override JsonElement JsonSchema => tool.InputSchema;
 
-        protected override async ValueTask<object?> InvokeCoreAsync(
+        // AIFunction forces this override, but Astra never uses SDK auto-invocation.
+        // Fail closed: if a middleware ever wakes this path, surface it loudly rather
+        // than silently bypassing the manual dispatch in SubmitAsync.
+        protected override ValueTask<object?> InvokeCoreAsync(
             AIFunctionArguments arguments,
-            CancellationToken cancellationToken)
-        {
-            return await tool.ExecuteAsync(arguments, cancellationToken);
-        }
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException(
+                "Tools are dispatched manually by AgentLoop; auto-invocation is intentionally disabled.");
     }
 }

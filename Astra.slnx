@@ -4,4 +4,7 @@
     <Project Path="src/Astra.Core/Astra.Core.csproj" />
     <Project Path="src/Astra.Providers/Astra.Providers.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Astra.Core.Tests/Astra.Core.Tests.csproj" />
+  </Folder>
 </Solution>
