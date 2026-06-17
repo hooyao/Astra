@@ -145,11 +145,20 @@ not re-prompt as arguments drift. See `agent/experiments/d02-tool-contract/`
 > **not yet built**; they are the permission-layer day's work. `Classify`'s v1
 > command set is a small allowlist (a demo, not the production engine).
 
-**Tool orchestration** will partition tool calls per turn (not yet implemented):
-- `Classify == Read` invocations can run in parallel
-- Write/Execute run serially in a write-exclusive batch
+**Tool orchestration** partitions a turn's tool calls into batches (implemented,
+Track D D3 — `ToolBatching.Partition` + batch execution in `AgentLoop`):
+- `Classify == Read` invocations coalesce into a concurrent batch (bounded, default 10)
+- Write/Execute/Other are barriers: each runs alone, serially
 
-**Tool assembly pipeline**: base tools → feature gates → permission rules → deny lists → MCP tools → sorted (built-in prefix, MCP suffix for cache stability)
+This is a **stable partition, not a sort**: it is the instruction-scheduling /
+data-hazard problem (RAR is the only safe reorder; every write is a fence; the
+model's emission order is program order). Concurrent tools fan in through one
+`Channel<AgentEvent>`; results map back to the LLM in original call order via
+`CallId`. See `agent/experiments/d03-tool-orchestration/teaching-notes.md`.
+
+**Tool assembly pipeline** (NOT yet implemented — Track D D15, when MCP tools
+exist): base tools → feature gates → permission rules → deny lists → MCP tools →
+sorted (built-in prefix, MCP suffix for cache stability).
 
 ### Permission Model (7-Layer Defense-in-Depth)
 
