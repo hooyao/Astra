@@ -58,6 +58,7 @@ internal sealed class ScriptedChatClient : IChatClient
 
 /// <summary>
 /// A trivial deterministic tool so the tool_use path has something to dispatch to.
+/// Streams a single Result chunk (no Progress) — the minimal well-behaved tool.
 /// </summary>
 internal sealed class FakeTimeTool : ITool
 {
@@ -67,8 +68,13 @@ internal sealed class FakeTimeTool : ITool
     public JsonElement InputSchema { get; } =
         JsonDocument.Parse("{\"type\":\"object\",\"properties\":{}}").RootElement.Clone();
 
-    public ValueTask<string> ExecuteAsync(IDictionary<string, object?>? arguments, CancellationToken ct) =>
-        new("2026-06-15 15:00:00");
+    public async IAsyncEnumerable<ToolOutput> ExecuteAsync(
+        IDictionary<string, object?>? arguments,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        await Task.CompletedTask;
+        yield return new ToolOutput.Result("2026-06-15 15:00:00");
+    }
 }
 
 /// <summary>

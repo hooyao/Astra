@@ -97,29 +97,57 @@ The query loop is a `while(true)` state machine. Each iteration yields `AgentEve
 
 ### Tool System
 
-Every tool implements a single interface with **behavioral flags over inheritance**:
+Every tool implements a single non-generic interface. Permission-relevant
+behavior is **classified per-invocation, not encoded in a type hierarchy**:
 
 ```csharp
-interface ITool<TInput, TOutput>
+public enum ToolAction { Read, Write, Execute, Other }   // Other = fail-closed bucket
+
+public abstract record ToolOutput                         // streamed out of a tool
+{
+    public sealed record Progress(string Text) : ToolOutput;  // live, for the human; not sent to LLM
+    public sealed record Result(string Text)   : ToolOutput;  // the one complete tool_result, for the LLM
+}
+
+public interface ITool
 {
     string Name { get; }
-    Task<ToolResult<TOutput>> CallAsync(TInput args, ToolContext ctx, CancellationToken ct);
-    
-    // Input-dependent behavioral flags (fail-closed defaults)
-    bool IsReadOnly(TInput input) => false;
-    bool IsConcurrencySafe(TInput input) => false;
-    bool IsDestructive(TInput input) => false;
-    
-    ValueTask<PermissionResult> CheckPermissionsAsync(TInput input, PermissionContext ctx);
-    JsonSchema InputSchema { get; }
+    string Description { get; }
+    JsonElement InputSchema { get; }
+
+    // Streaming: yield zero+ Progress for the human, exactly one Result (last) for the LLM.
+    IAsyncEnumerable<ToolOutput> ExecuteAsync(IDictionary<string, object?>? arguments, CancellationToken ct);
+
+    // Input-dependent classification. Default interface method, fail-closed default.
+    ToolAction Classify(IDictionary<string, object?>? arguments) => ToolAction.Other;
 }
 ```
 
-Key: `IsReadOnly("ls")` returns true, `IsReadOnly("rm -rf")` returns false. This is input-dependent, not type-dependent. No class hierarchies like `ReadOnlyTool` — use boolean flags.
+Key: `Classify` is **input-dependent**, not type-dependent. `BashTool.Classify`
+returns `Read` for `"ls"` and `Execute` for `"rm -rf"` — one type, behavior
+varies by argument. No class hierarchies like `ReadOnlyTool`. The fail-closed
+default (`Other`, the strictest bucket) lives in the interface as a C# default
+interface method, so forgetting to classify is safe, never unsafe.
 
-**Tool orchestration** partitions tool calls per turn:
-- Tools where `IsConcurrencySafe` = true run in parallel
-- Others run serially in a write-exclusive batch
+Why a category (`ToolAction`) instead of three bools (`IsReadOnly` /
+`IsConcurrencySafe` / `IsDestructive`): the bools force every caller to AND/OR
+three predicates and can't name a single class per call. More importantly, keying
+permission on the command *string* (as Claude Code does, exact/prefix) re-prompts
+on every small argument change — the UX failure that drives users to bypass
+permissions entirely. A behavior *class* lets a host approve "all reads" once and
+not re-prompt as arguments drift. See `agent/experiments/d02-tool-contract/`
+(in the parent repo) for the verified Claude Code source analysis.
+
+> Status: `ITool` (Name/Description/InputSchema/ExecuteAsync/Classify) and
+> `BashTool` are implemented (Track D D2). The two-layer permission model below —
+> `Classify` for bulk class decisions, plus a rule engine with a deny-list for
+> per-command exceptions — and `ToolContext` / `CheckPermissionsAsync` are
+> **not yet built**; they are the permission-layer day's work. `Classify`'s v1
+> command set is a small allowlist (a demo, not the production engine).
+
+**Tool orchestration** will partition tool calls per turn (not yet implemented):
+- `Classify == Read` invocations can run in parallel
+- Write/Execute run serially in a write-exclusive batch
 
 **Tool assembly pipeline**: base tools → feature gates → permission rules → deny lists → MCP tools → sorted (built-in prefix, MCP suffix for cache stability)
 
@@ -178,7 +206,7 @@ Support stdio, SSE, HTTP, and WebSocket transports. MCP tools appear identical t
 ## Key Design Patterns
 
 - **IAsyncEnumerable as communication protocol** — replaces callbacks/events/message bus
-- **Behavioral flags over inheritance** — input-dependent `IsReadOnly`/`IsConcurrencySafe`
+- **Behavioral classification over inheritance** — input-dependent `Classify` returning `ToolAction`, not a tool type hierarchy
 - **Mutable state with immutable snapshots** — mutable messages list, immutable snapshot for query loop
 - **Partition-sort for prompt cache stability** — built-in tools as contiguous prefix, MCP as suffix
 - **Watermark-based error scoping** — turn-scoped errors without counters

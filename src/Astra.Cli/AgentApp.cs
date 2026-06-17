@@ -42,6 +42,11 @@ public sealed class AgentApp(IChatClient chatClient, IReadOnlyList<ITool> tools)
                             Console.WriteLine($"  [tool: {name}]");
                             Console.ResetColor();
                             break;
+                        case AgentEvent.ToolProgress { Text: var text }:
+                            Console.ForegroundColor = ConsoleColor.DarkGray;
+                            Console.WriteLine($"  | {text}");
+                            Console.ResetColor();
+                            break;
                         case AgentEvent.ToolResult { ToolName: var name, Result: var result }:
                             var preview = result.Length > 200 ? result[..200] + "..." : result;
                             Console.ForegroundColor = ConsoleColor.DarkGray;
