@@ -130,6 +130,12 @@ public sealed class BashTool : ITool
             SingleWriter = false, // stdout and stderr handlers both write
         });
 
+        // TODO (D4 streaming/control layer): on cancellation, kill the child
+        // process TREE, not just dispose the handle. `using var process` only
+        // frees the handle when `ct` fires (e.g. user says "stop") — the spawned
+        // process keeps running. Need a `ct.Register(() => process.Kill(entireProcessTree: true))`
+        // (or finally-path kill), because killing `sh -c "npm install"` must take
+        // npm down too. This is interruption scenario #2/#3 from d02 notes.
         using var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
         var full = new StringBuilder();
 

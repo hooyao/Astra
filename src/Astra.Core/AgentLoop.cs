@@ -1,5 +1,7 @@
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Threading.Channels;
 using Microsoft.Extensions.AI;
 
 namespace Astra.Core;
@@ -10,6 +12,14 @@ namespace Astra.Core;
 /// </summary>
 public sealed class AgentLoop(IChatClient chatClient, IReadOnlyList<ITool> tools, string? systemPrompt = null)
 {
+    /// <summary>
+    /// Upper bound on tools running at once inside a single concurrent (read) batch.
+    /// Claude Code uses the same default (10, env CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY).
+    /// A bound matters because the model can request many reads in one turn and each
+    /// is a real process / file handle.
+    /// </summary>
+    private const int MaxConcurrentTools = 10;
+
     private readonly Dictionary<string, ITool> _toolMap = tools.ToDictionary(t => t.Name);
     private readonly List<AITool> _aiTools = tools.Select(t => (AITool)new ToolAIFunction(t)).ToList();
     private readonly List<ChatMessage> _messages = systemPrompt is not null
@@ -55,73 +65,155 @@ public sealed class AgentLoop(IChatClient chatClient, IReadOnlyList<ITool> tools
             if (toolCalls.Count == 0)
                 yield break; // No tool calls — LLM is done
 
-            // Execute tools and collect results
+            // D3 — partition this turn's calls into batches: runs of read-only
+            // calls that may execute concurrently, and single non-read calls that
+            // act as barriers and run alone. See ToolBatching for the why (it is a
+            // reordering / data-hazard problem, not a sort).
+            var batches = ToolBatching.Partition(toolCalls, ClassifyCall);
+
+            // One Tool message carries every result for the turn (as in D2). We
+            // accumulate across batches and add it once, after all batches run.
             List<AIContent> resultContents = [];
-            foreach (var call in toolCalls)
+
+            foreach (var batch in batches)
             {
-                yield return new AgentEvent.ToolUse(call.Name, call.CallId, call.Arguments);
+                // Announce every call in the batch up front, in the model's order —
+                // deterministic regardless of which tool finishes first.
+                foreach (var call in batch.Calls)
+                    yield return new AgentEvent.ToolUse(call.Name, call.CallId, call.Arguments);
 
-                string result;
-                AgentEvent.Error? toolError = null;
-
-                if (_toolMap.TryGetValue(call.Name, out var tool))
+                // The batch runs in a background producer that owns all try/catch and
+                // writes events into a channel. The iterator just drains the channel
+                // and yields — which keeps the yield out of any try/catch (CS1626) and
+                // merges N concurrent tool streams into one ordered event stream.
+                var channel = Channel.CreateUnbounded<AgentEvent>(new UnboundedChannelOptions
                 {
-                    // Stream the tool: forward every Progress chunk to the consumer
-                    // live, keep the last Result as the block fed back to the LLM.
-                    // yield-return cannot live inside a try/catch (CS1626), and we
-                    // must NOT buffer Progress until completion (that would defeat
-                    // streaming). So drive the enumerator by hand: each step's
-                    // MoveNext/Current runs in the try, the yield happens outside it.
-                    string? finalResult = null;
-                    var enumerator = tool.ExecuteAsync(call.Arguments, ct).GetAsyncEnumerator(ct);
-                    try
-                    {
-                        while (true)
-                        {
-                            ToolOutput? output;
-                            try
-                            {
-                                if (!await enumerator.MoveNextAsync())
-                                    break;
-                                output = enumerator.Current;
-                            }
-                            catch (OperationCanceledException) { throw; }
-                            catch (Exception ex)
-                            {
-                                toolError = new AgentEvent.Error($"Tool '{call.Name}' failed: {ex.Message}", ex);
-                                finalResult = $"Error: {ex.Message}";
-                                break;
-                            }
+                    SingleReader = true,
+                    SingleWriter = false, // concurrent tools all write
+                });
+                var results = new ConcurrentDictionary<string, AIContent>();
+                var producer = RunBatchAsync(batch, channel.Writer, results, ct);
 
-                            if (output is ToolOutput.Progress(var text))
-                                yield return new AgentEvent.ToolProgress(call.Name, call.CallId, text);
-                            else if (output is ToolOutput.Result(var resultText))
-                                finalResult = resultText;
-                        }
-                    }
-                    finally
-                    {
-                        await enumerator.DisposeAsync();
-                    }
+                // Drain without a ct: the producer's finally always completes the
+                // channel (even on cancellation), so the drain ends and we then
+                // observe the producer task to surface any OperationCanceledException.
+                await foreach (var evt in channel.Reader.ReadAllAsync(CancellationToken.None))
+                    yield return evt;
 
-                    // A tool that streamed only Progress (no Result) is treated as empty.
-                    result = finalResult ?? string.Empty;
-                }
-                else
-                {
-                    result = $"Error: unknown tool '{call.Name}'";
-                }
+                await producer; // re-throws cancellation; tool failures became Error events
 
-                if (toolError is not null)
-                    yield return toolError;
-
-                resultContents.Add(new FunctionResultContent(call.CallId, result));
-                yield return new AgentEvent.ToolResult(call.Name, call.CallId, result);
+                // Feed results back to the LLM in the model's original call order
+                // (the concurrent batch may have completed them out of order).
+                foreach (var call in batch.Calls)
+                    if (results.TryGetValue(call.CallId, out var content))
+                        resultContents.Add(content);
             }
 
             // Add tool results to conversation and loop
             _messages.Add(new ChatMessage(ChatRole.Tool, resultContents));
         }
+    }
+
+    /// <summary>
+    /// Concurrency-safety is derived from D2's behavioral classification — there is
+    /// no separate flag. A call is safe to run in parallel iff it is a pure read;
+    /// an unknown tool classifies as <see cref="ToolAction.Other"/> (fail-closed),
+    /// so it runs alone.
+    /// </summary>
+    private ToolAction ClassifyCall(FunctionCallContent call) =>
+        _toolMap.TryGetValue(call.Name, out var tool)
+            ? tool.Classify(call.Arguments)
+            : ToolAction.Other;
+
+    /// <summary>
+    /// Run one batch to completion, writing all of its events into <paramref name="writer"/>
+    /// and depositing each call's final result into <paramref name="results"/> keyed by
+    /// CallId. A concurrent batch runs its calls in parallel up to
+    /// <see cref="MaxConcurrentTools"/>; a serial batch (always a single non-read call)
+    /// runs that one call. The channel is always completed in the finally so the
+    /// iterator's drain terminates even on cancellation or fault.
+    /// </summary>
+    private async Task RunBatchAsync(
+        ToolBatch batch,
+        ChannelWriter<AgentEvent> writer,
+        ConcurrentDictionary<string, AIContent> results,
+        CancellationToken ct)
+    {
+        try
+        {
+            var maxConcurrency = batch.IsConcurrent ? MaxConcurrentTools : 1;
+            using var slots = new SemaphoreSlim(maxConcurrency);
+            var tasks = batch.Calls.Select(async call =>
+            {
+                await slots.WaitAsync(ct);
+                try
+                {
+                    await RunOneToolAsync(call, writer, results, ct);
+                }
+                finally
+                {
+                    slots.Release();
+                }
+            });
+            await Task.WhenAll(tasks);
+        }
+        finally
+        {
+            writer.Complete();
+        }
+    }
+
+    /// <summary>
+    /// Execute a single tool call, streaming its <see cref="ToolOutput.Progress"/> live
+    /// as <see cref="AgentEvent.ToolProgress"/> and recording its single
+    /// <see cref="ToolOutput.Result"/> as the block fed back to the LLM. This is a plain
+    /// async method (not an iterator), so the try/catch around the stream is allowed.
+    /// Cancellation propagates; any other tool failure becomes an Error event plus an
+    /// error result string (so the LLM sees the failure rather than the turn vanishing).
+    /// </summary>
+    private async Task RunOneToolAsync(
+        FunctionCallContent call,
+        ChannelWriter<AgentEvent> writer,
+        ConcurrentDictionary<string, AIContent> results,
+        CancellationToken ct)
+    {
+        if (!_toolMap.TryGetValue(call.Name, out var tool))
+        {
+            var unknown = $"Error: unknown tool '{call.Name}'";
+            results[call.CallId] = new FunctionResultContent(call.CallId, unknown);
+            await writer.WriteAsync(new AgentEvent.ToolResult(call.Name, call.CallId, unknown), CancellationToken.None);
+            return;
+        }
+
+        string? finalResult = null;
+        try
+        {
+            await foreach (var output in tool.ExecuteAsync(call.Arguments, ct).WithCancellation(ct))
+            {
+                if (output is ToolOutput.Progress(var text))
+                    await writer.WriteAsync(new AgentEvent.ToolProgress(call.Name, call.CallId, text), ct);
+                else if (output is ToolOutput.Result(var resultText))
+                    finalResult = resultText;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw; // cancellation is not a tool result — let it propagate
+        }
+        catch (Exception ex)
+        {
+            await writer.WriteAsync(
+                new AgentEvent.Error($"Tool '{call.Name}' failed: {ex.Message}", ex), CancellationToken.None);
+            var errMsg = $"Error: {ex.Message}";
+            results[call.CallId] = new FunctionResultContent(call.CallId, errMsg);
+            await writer.WriteAsync(new AgentEvent.ToolResult(call.Name, call.CallId, errMsg), CancellationToken.None);
+            return;
+        }
+
+        // A tool that streamed only Progress (no Result) is treated as empty.
+        var result = finalResult ?? string.Empty;
+        results[call.CallId] = new FunctionResultContent(call.CallId, result);
+        await writer.WriteAsync(new AgentEvent.ToolResult(call.Name, call.CallId, result), ct);
     }
 
     /// <summary>
