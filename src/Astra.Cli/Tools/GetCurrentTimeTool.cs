@@ -15,8 +15,11 @@ public sealed class GetCurrentTimeTool : ITool
         }
         """).RootElement.Clone();
 
-    public ValueTask<string> ExecuteAsync(IDictionary<string, object?>? arguments, CancellationToken ct)
+    public async IAsyncEnumerable<ToolOutput> ExecuteAsync(
+        IDictionary<string, object?>? arguments,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
-        return new(DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss zzz"));
+        await Task.CompletedTask; // async iterator with no awaits — suppress CS1998
+        yield return new ToolOutput.Result(DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss zzz"));
     }
 }

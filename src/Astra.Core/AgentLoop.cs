@@ -66,16 +66,46 @@ public sealed class AgentLoop(IChatClient chatClient, IReadOnlyList<ITool> tools
 
                 if (_toolMap.TryGetValue(call.Name, out var tool))
                 {
+                    // Stream the tool: forward every Progress chunk to the consumer
+                    // live, keep the last Result as the block fed back to the LLM.
+                    // yield-return cannot live inside a try/catch (CS1626), and we
+                    // must NOT buffer Progress until completion (that would defeat
+                    // streaming). So drive the enumerator by hand: each step's
+                    // MoveNext/Current runs in the try, the yield happens outside it.
+                    string? finalResult = null;
+                    var enumerator = tool.ExecuteAsync(call.Arguments, ct).GetAsyncEnumerator(ct);
                     try
                     {
-                        result = await tool.ExecuteAsync(call.Arguments, ct);
+                        while (true)
+                        {
+                            ToolOutput? output;
+                            try
+                            {
+                                if (!await enumerator.MoveNextAsync())
+                                    break;
+                                output = enumerator.Current;
+                            }
+                            catch (OperationCanceledException) { throw; }
+                            catch (Exception ex)
+                            {
+                                toolError = new AgentEvent.Error($"Tool '{call.Name}' failed: {ex.Message}", ex);
+                                finalResult = $"Error: {ex.Message}";
+                                break;
+                            }
+
+                            if (output is ToolOutput.Progress(var text))
+                                yield return new AgentEvent.ToolProgress(call.Name, call.CallId, text);
+                            else if (output is ToolOutput.Result(var resultText))
+                                finalResult = resultText;
+                        }
                     }
-                    catch (OperationCanceledException) { throw; }
-                    catch (Exception ex)
+                    finally
                     {
-                        result = $"Error: {ex.Message}";
-                        toolError = new AgentEvent.Error($"Tool '{call.Name}' failed: {ex.Message}", ex);
+                        await enumerator.DisposeAsync();
                     }
+
+                    // A tool that streamed only Progress (no Result) is treated as empty.
+                    result = finalResult ?? string.Empty;
                 }
                 else
                 {
