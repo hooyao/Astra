@@ -130,12 +130,18 @@ public sealed class BashTool : ITool
             SingleWriter = false, // stdout and stderr handlers both write
         });
 
-        // TODO (D4 streaming/control layer): on cancellation, kill the child
-        // process TREE, not just dispose the handle. `using var process` only
-        // frees the handle when `ct` fires (e.g. user says "stop") — the spawned
-        // process keeps running. Need a `ct.Register(() => process.Kill(entireProcessTree: true))`
-        // (or finally-path kill), because killing `sh -c "npm install"` must take
-        // npm down too. This is interruption scenario #2/#3 from d02 notes.
+        // D4 (control layer): the child must be killed as a TREE on every abnormal
+        // exit. `using` only Disposes the Process — that frees the OS handle and
+        // sends NO signal, so on cancellation the spawned shell and its descendants
+        // (`sh -c "npm install"` -> npm -> node -> ...) would be reparented to init
+        // and keep running. The work always lives in the shell's descendants, never
+        // in the shell itself, so a single Kill() of the shell is not enough —
+        // entireProcessTree is the only correct option here. The kill goes in a
+        // finally (below): it runs on normal completion, on a consumer break, and on
+        // the OperationCanceledException thrown by ReadAllAsync / WaitForExitAsync.
+        // try/finally with NO catch is legal around `yield` (CS1626 bans only catch),
+        // and `await foreach` invokes this iterator's DisposeAsync on break/throw, so
+        // the finally fires even when the consumer simply stops pulling.
         using var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
         var full = new StringBuilder();
 
@@ -150,18 +156,56 @@ public sealed class BashTool : ITool
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
 
-        // Yield each line both as live Progress (to the human) and accumulate it
-        // for the final Result (to the LLM). For bash the two coincide; the
-        // contract does not require it.
-        await foreach (var line in channel.Reader.ReadAllAsync(ct))
+        try
         {
-            full.Append(line).Append('\n');
-            yield return new ToolOutput.Progress(line);
+            // Yield each line both as live Progress (to the human) and accumulate it
+            // for the final Result (to the LLM). For bash the two coincide; the
+            // contract does not require it.
+            await foreach (var line in channel.Reader.ReadAllAsync(ct))
+            {
+                full.Append(line).Append('\n');
+                yield return new ToolOutput.Progress(line);
+            }
+
+            await process.WaitForExitAsync(ct);
+        }
+        finally
+        {
+            await KillTreeAsync(process);
         }
 
-        await process.WaitForExitAsync(ct);
-
         yield return new ToolOutput.Result(full.ToString().TrimEnd());
+    }
+
+    /// <summary>
+    /// Kill the process and all its descendants, then reap it. A no-op if the
+    /// process already exited (the normal-completion path), so it never false-kills.
+    /// </summary>
+    /// <remarks>
+    /// Two races are swallowed by design. (1) TOCTOU: the process can exit between
+    /// the <see cref="Process.HasExited"/> check and <see cref="Process.Kill(bool)"/>,
+    /// which then throws <see cref="InvalidOperationException"/> — harmless, the
+    /// goal (process gone) is already met. (2) Reaping uses
+    /// <see cref="CancellationToken.None"/> on purpose: the caller's token is
+    /// typically already cancelled (that is why we are killing), but we must still
+    /// wait for the tree to actually tear down before returning, or we would hand
+    /// back control while children are still alive.
+    /// </remarks>
+    private static async Task KillTreeAsync(Process process)
+    {
+        if (process.HasExited)
+            return;
+
+        try
+        {
+            process.Kill(entireProcessTree: true);
+        }
+        catch (InvalidOperationException)
+        {
+            return; // exited between the check and the kill — nothing left to reap
+        }
+
+        await process.WaitForExitAsync(CancellationToken.None);
     }
 
     /// <summary>
