@@ -145,12 +145,26 @@ public sealed class BashTool : ITool
         using var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
         var full = new StringBuilder();
 
-        process.OutputDataReceived += (_, e) => { if (e.Data is not null) channel.Writer.TryWrite(e.Data); };
-        process.ErrorDataReceived += (_, e) => { if (e.Data is not null) channel.Writer.TryWrite(e.Data); };
-        // Complete the channel once the process exits AND both stream readers have
-        // drained (Exited can fire before the last OutputDataReceived); WaitForExit
-        // below flushes the async readers, so completing on Exited is safe here.
-        process.Exited += (_, _) => channel.Writer.TryComplete();
+        // Complete the channel when BOTH streams reach EOF, not on Process.Exited.
+        // BeginOutputReadLine raises the handler once with e.Data == null at the
+        // stream's EOF; that sentinel is the only point at which all buffered output
+        // has been delivered. Completing on Exited instead is a race: Exited fires
+        // independently of the threadpool that pumps OutputDataReceived, so on a
+        // fast-exiting command (e.g. `printf`) the channel could be completed before
+        // the data lines were written — those TryWrite calls then drop silently and
+        // the output is lost (observed as empty streaming on Linux; Windows timing
+        // merely hid it). EOF on both streams happens at/after exit, so the drain
+        // still waits for the process to finish.
+        var pendingStreams = 2; // stdout + stderr; complete once both hit EOF
+        void OnData(DataReceivedEventArgs e)
+        {
+            if (e.Data is not null)
+                channel.Writer.TryWrite(e.Data);
+            else if (Interlocked.Decrement(ref pendingStreams) == 0)
+                channel.Writer.TryComplete();
+        }
+        process.OutputDataReceived += (_, e) => OnData(e);
+        process.ErrorDataReceived += (_, e) => OnData(e);
 
         process.Start();
         process.BeginOutputReadLine();
