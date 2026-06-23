@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading.Channels;
+using Astra.Core.Permissions;
 using Microsoft.Extensions.AI;
 
 namespace Astra.Core;
@@ -10,7 +11,11 @@ namespace Astra.Core;
 /// The core agent loop: call LLM -> execute tools -> repeat until done.
 /// Yields <see cref="AgentEvent"/> items via IAsyncEnumerable for backpressure and composability.
 /// </summary>
-public sealed class AgentLoop(IChatClient chatClient, IReadOnlyList<ITool> tools, string? systemPrompt = null)
+public sealed class AgentLoop(
+    IChatClient chatClient,
+    IReadOnlyList<ITool> tools,
+    string? systemPrompt = null,
+    IPermissionEngine? permissionEngine = null)
 {
     /// <summary>
     /// Upper bound on tools running at once inside a single concurrent (read) batch.
@@ -185,10 +190,31 @@ public sealed class AgentLoop(IChatClient chatClient, IReadOnlyList<ITool> tools
             return;
         }
 
+        // Permission gate (D5) — runs BEFORE ExecuteAsync, so a denied side effect
+        // never happens. When no engine is configured the loop is unguarded (every
+        // call allowed), preserving the pre-D5 behavior. A Deny short-circuits: its
+        // reason becomes the tool result fed back to the LLM (so the model adapts)
+        // plus a ToolDenied event for the human. Cancellation during an interactive
+        // Ask propagates like any other OCE.
+        IDictionary<string, object?>? effectiveArgs = call.Arguments;
+        if (permissionEngine is not null)
+        {
+            var decision = await permissionEngine.CheckAsync(call, ClassifyCall(call), ct);
+            if (decision is PermissionDecision.Deny(var reason))
+            {
+                results[call.CallId] = new FunctionResultContent(call.CallId, reason);
+                await writer.WriteAsync(new AgentEvent.ToolDenied(call.Name, call.CallId, reason), CancellationToken.None);
+                await writer.WriteAsync(new AgentEvent.ToolResult(call.Name, call.CallId, reason), CancellationToken.None);
+                return;
+            }
+            if (decision is PermissionDecision.Allow(var updated) && updated is not null)
+                effectiveArgs = updated; // a policy may rewrite arguments before run
+        }
+
         string? finalResult = null;
         try
         {
-            await foreach (var output in tool.ExecuteAsync(call.Arguments, ct).WithCancellation(ct))
+            await foreach (var output in tool.ExecuteAsync(effectiveArgs, ct).WithCancellation(ct))
             {
                 if (output is ToolOutput.Progress(var text))
                     await writer.WriteAsync(new AgentEvent.ToolProgress(call.Name, call.CallId, text), ct);
