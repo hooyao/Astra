@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading.Channels;
+using Astra.Core.Context;
 using Astra.Core.Permissions;
 using Microsoft.Extensions.AI;
 
@@ -11,11 +12,29 @@ namespace Astra.Core;
 /// The core agent loop: call LLM -> execute tools -> repeat until done.
 /// Yields <see cref="AgentEvent"/> items via IAsyncEnumerable for backpressure and composability.
 /// </summary>
+/// <remarks>
+/// D6 (context assembly) layers three lifetimes into what gets sent each turn:
+/// <list type="bullet">
+/// <item><b>a</b> — <paramref name="systemPrompt"/>: static identity, never changes.</item>
+/// <item><b>b</b> — <paramref name="sessionContext"/>: computed once at session start and
+/// frozen (memoize it with <see cref="MemoizedSessionContext"/>). Appended after a to
+/// form a single byte-stable system prefix, so a provider's prompt cache keeps hitting it.</item>
+/// <item><b>c</b> — <paramref name="attachmentProviders"/>: recomputed every turn under
+/// <paramref name="attachmentDeadline"/> and appended to the current user message. A hung
+/// provider is dropped at the deadline so it cannot delay the turn.</item>
+/// </list>
+/// All three are optional; passing none reproduces the pre-D6 behavior (bare system
+/// prompt, no attachments), so existing callers/tests are unaffected.
+/// See agent/experiments/d06-context-assembly/source-reconciliation.md.
+/// </remarks>
 public sealed class AgentLoop(
     IChatClient chatClient,
     IReadOnlyList<ITool> tools,
     string? systemPrompt = null,
-    IPermissionEngine? permissionEngine = null)
+    IPermissionEngine? permissionEngine = null,
+    ISessionContextProvider? sessionContext = null,
+    IReadOnlyList<IAttachmentProvider>? attachmentProviders = null,
+    TimeSpan? attachmentDeadline = null)
 {
     /// <summary>
     /// Upper bound on tools running at once inside a single concurrent (read) batch.
@@ -27,15 +46,70 @@ public sealed class AgentLoop(
 
     private readonly Dictionary<string, ITool> _toolMap = tools.ToDictionary(t => t.Name);
     private readonly List<AITool> _aiTools = tools.Select(t => (AITool)new ToolAIFunction(t)).ToList();
-    private readonly List<ChatMessage> _messages = systemPrompt is not null
-        ? [new(ChatRole.System, systemPrompt)]
-        : [];
+
+    // Layer c: the per-turn attachment gatherer (null when no providers were supplied).
+    // Default deadline mirrors Claude Code's getAttachments() 1-second AbortController.
+    private readonly AttachmentGatherer? _attachments =
+        attachmentProviders is { Count: > 0 }
+            ? new AttachmentGatherer(attachmentProviders, attachmentDeadline ?? TimeSpan.FromSeconds(1))
+            : null;
+
+    // The conversation transcript. The system message (layers a + b) is prepended
+    // once, lazily, on the first SubmitAsync — b's provider is async so it cannot run
+    // in the constructor. After that the system message is never rebuilt, which is
+    // what keeps the a+b prefix byte-stable across turns.
+    private readonly List<ChatMessage> _messages = [];
+    private bool _systemAssembled;
+
+    /// <summary>
+    /// Build the system message (a + b) exactly once and prepend it. b is awaited here,
+    /// on the first turn only; memoize the provider so this single await is also the
+    /// only time its underlying work (e.g. a git subprocess) runs.
+    /// </summary>
+    private async ValueTask EnsureSystemAssembledAsync(CancellationToken ct)
+    {
+        if (_systemAssembled)
+            return;
+        _systemAssembled = true;
+
+        var a = systemPrompt;
+        var b = sessionContext is not null ? await sessionContext.GetAsync(ct) : null;
+
+        var prefix = (a, b) switch
+        {
+            (null, null) => null,
+            (not null, null) => a,
+            (null, not null) => b,
+            (not null, not null) => $"{a}\n\n{b}",
+        };
+
+        if (prefix is not null)
+            _messages.Insert(0, new ChatMessage(ChatRole.System, prefix));
+    }
 
     public async IAsyncEnumerable<AgentEvent> SubmitAsync(
         string userMessage,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        _messages.Add(new ChatMessage(ChatRole.User, userMessage));
+        // Layer a + b: assemble the byte-stable system prefix once, before the first turn.
+        await EnsureSystemAssembledAsync(ct);
+
+        // Layer c: gather this turn's attachments under the deadline and append them
+        // to the user message. Attachments precede the user's text (they are ambient
+        // context the model reads before the ask), each in a labeled block. A dropped
+        // or timed-out provider simply contributes nothing this turn.
+        var userContent = userMessage;
+        if (_attachments is not null)
+        {
+            var gathered = await _attachments.GatherAsync(ct);
+            if (gathered.Count > 0)
+            {
+                var blocks = gathered.Select(att => $"<attachment name=\"{att.Name}\">\n{att.Text}\n</attachment>");
+                userContent = $"{string.Join("\n\n", blocks)}\n\n{userMessage}";
+            }
+        }
+
+        _messages.Add(new ChatMessage(ChatRole.User, userContent));
 
         var options = new ChatOptions();
         if (_aiTools.Count > 0)

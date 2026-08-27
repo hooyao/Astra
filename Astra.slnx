@@ -1,4 +1,7 @@
 <Solution>
+  <Folder Name="/samples/">
+    <Project Path="samples/ContextAssemblyDemo/ContextAssemblyDemo.csproj" />
+  </Folder>
   <Folder Name="/src/">
     <Project Path="src/Astra.Cli/Astra.Cli.csproj" />
     <Project Path="src/Astra.Core/Astra.Core.csproj" />
