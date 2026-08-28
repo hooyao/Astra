@@ -1,7 +1,25 @@
 ﻿# Project Progress
 
-Last updated: 2026-04-11 14:54:42
-Branch: master
+Last updated: 2026-08-28
+Branch: codex/d07-compaction
+
+## Current Work
+
+- Track D Day 7 compaction is complete on top of D6 commit `c45c7c3`; the
+  learner directly inspected and confirmed both payoff paths on 2026-08-28.
+- Added an explicit `CompactionResult` union (`NotNeeded` / `Applied` /
+  `Failed`), rough provider-neutral token estimation, allowlisted
+  microcompaction, LLM full compaction with a verbatim recent tail, and atomic
+  preflight integration before every model round-trip.
+- Added an OpenAI Responses-compatible `IChatClient` adapter. Verified against
+  local `gpt-5.6-sol` at `http://localhost:8765/codex` with no credential.
+- Verification: 70/70 tests, formatting clean, solution build clean, Native AOT
+  publish clean. `samples/CompactionDemo` verifies both deterministic and real
+  provider paths.
+- Next curriculum step: D8 multi-agent coordinator with isolated worker context,
+  condensed summaries, single-threaded writes, and measured token multiple.
+- Existing uncommitted Codex support files (`CLAUDE.md`, `.codex/`, `AGENTS.md`)
+  predate D7 and remain preserved.
 
 ## Recent Commits
 
@@ -13,9 +31,8 @@ Branch: master
 ## Uncommitted Changes
 
 ```
- M CLAUDE.md
-?? .claude/
-?? refs/architecture-index.md
+ D7 implementation and tests (see git status)
+ pre-existing Codex support changes
 ```
 
 ## Source Files

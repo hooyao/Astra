@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides canonical guidance to Claude Code (claude.ai/code) and Codex when working with code in this repository.
 
 ## Project Overview
 
@@ -13,7 +13,7 @@ Reference materials (git submodules under `refs/`):
 ## Language Policy
 
 - **Conversation**: Always reply in the same language the user uses.
-- **Written artifacts**: All documentation, memory files, and CLAUDE.md must be in **English**, regardless of conversation language.
+- **Written artifacts**: All documentation, memory files, `CLAUDE.md`, and `AGENTS.md` must be in **English**, regardless of conversation language.
 
 ## Build & Development Commands
 
@@ -138,12 +138,13 @@ permissions entirely. A behavior *class* lets a host approve "all reads" once an
 not re-prompt as arguments drift. See `agent/experiments/d02-tool-contract/`
 (in the parent repo) for the verified Claude Code source analysis.
 
-> Status: `ITool` (Name/Description/InputSchema/ExecuteAsync/Classify) and
-> `BashTool` are implemented (Track D D2). The two-layer permission model below —
-> `Classify` for bulk class decisions, plus a rule engine with a deny-list for
-> per-command exceptions — and `ToolContext` / `CheckPermissionsAsync` are
-> **not yet built**; they are the permission-layer day's work. `Classify`'s v1
-> command set is a small allowlist (a demo, not the production engine).
+> Status: `ITool` and `BashTool` are implemented (Track D D2). The two-layer
+> permission model is also implemented (D5): `Classify` provides the bulk
+> behavior class; `ClassDefaultPolicy` layers per-command exceptions on top;
+> `DefaultPermissionEngine` resolves Allow/Deny/Ask through an optional
+> `IUserConfirmation` and fails closed in headless mode. Full `InputSchema`
+> validation remains deferred. `Classify`'s v1 command set is a small allowlist
+> (a demo, not the production classifier).
 
 **Tool orchestration** partitions a turn's tool calls into batches (implemented,
 Track D D3 — `ToolBatching.Partition` + batch execution in `AgentLoop`):
@@ -184,10 +185,24 @@ Fail-closed: unknown → deny. Each layer can short-circuit.
 
 ### Compression (Four Tiers)
 
-1. **MicroCompact** — Time-decay old tool results, preserve recent window
-2. **Session Memory** — Background-maintained summary (no LLM call)
-3. **Full Compact** — LLM-generated summary (sub-agent)
-4. **Reactive Compact** — Emergency compression on `prompt_too_long`
+1. **MicroCompact** — Clear allowlisted old tool-result payloads; preserve call
+   IDs and a recent window. Local content clearing runs under token pressure or
+   after a 60-minute cold-cache interval.
+2. **Session Memory** — Background-maintained summary (deferred to D9).
+3. **Full Compact** — LLM-generated summary of completed older turns while the
+   current user turn remains verbatim.
+4. **Reactive Compact** — Emergency full-compaction trigger after
+   `prompt_too_long` (contract represented; provider retry wiring deferred).
+
+> Status: D7 implements `CompactionResult` as an explicit NotNeeded / Applied /
+> Failed union, `RoughChatTokenEstimator`, cache-aware allowlisted
+> `ContextCompactor` micro/full paths, and atomic history replacement in
+> `AgentLoop`. Preflight runs immediately before every model round-trip, so a
+> large tool result is compacted before the follow-up call. `Applied` is the only
+> outcome that exposes a detached candidate; cancellation or failure leaves the
+> original history unchanged. The CLI emits `CompactionCompleted` with ordered
+> step metrics. `samples/CompactionDemo` is the runnable deterministic + real
+> provider payoff.
 
 ### Multi-Agent Coordination
 

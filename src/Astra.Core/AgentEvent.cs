@@ -1,3 +1,5 @@
+using Astra.Core.Compaction;
+
 namespace Astra.Core;
 
 /// <summary>
@@ -25,6 +27,9 @@ public abstract record AgentEvent
     /// is also fed back to the LLM as the tool result so the model can adapt.
     /// </summary>
     public sealed record ToolDenied(string ToolName, string CallId, string Reason) : AgentEvent;
+
+    /// <summary>A context-compaction transaction committed before a model call.</summary>
+    public sealed record CompactionCompleted(CompactionReport Report) : AgentEvent;
 
     /// <summary>An error occurred during LLM call or tool execution.</summary>
     public sealed record Error(string Message, Exception? Exception = null) : AgentEvent;
