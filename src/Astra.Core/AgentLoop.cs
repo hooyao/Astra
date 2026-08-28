@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading.Channels;
+using Astra.Core.Compaction;
 using Astra.Core.Context;
 using Astra.Core.Permissions;
 using Microsoft.Extensions.AI;
@@ -34,7 +35,8 @@ public sealed class AgentLoop(
     IPermissionEngine? permissionEngine = null,
     ISessionContextProvider? sessionContext = null,
     IReadOnlyList<IAttachmentProvider>? attachmentProviders = null,
-    TimeSpan? attachmentDeadline = null)
+    TimeSpan? attachmentDeadline = null,
+    IContextCompactor? contextCompactor = null)
 {
     /// <summary>
     /// Upper bound on tools running at once inside a single concurrent (read) batch.
@@ -58,7 +60,7 @@ public sealed class AgentLoop(
     // once, lazily, on the first SubmitAsync — b's provider is async so it cannot run
     // in the constructor. After that the system message is never rebuilt, which is
     // what keeps the a+b prefix byte-stable across turns.
-    private readonly List<ChatMessage> _messages = [];
+    private List<ChatMessage> _messages = [];
     private bool _systemAssembled;
 
     /// <summary>
@@ -118,6 +120,35 @@ public sealed class AgentLoop(
         while (true)
         {
             ct.ThrowIfCancellationRequested();
+
+            // D7 — preflight before EVERY model round-trip, not merely once per
+            // SubmitAsync call. A tool result appended later in this same turn may
+            // itself cross the context threshold. Only Applied exposes a detached,
+            // complete candidate; assignment commits it atomically. Failed carries
+            // no candidate, so the original history remains authoritative.
+            if (contextCompactor is not null)
+            {
+                var compaction = await contextCompactor.CompactIfNeededAsync(
+                    _messages,
+                    CompactionTrigger.Automatic,
+                    ct);
+
+                switch (compaction)
+                {
+                    case CompactionResult.NotNeeded:
+                        break;
+
+                    case CompactionResult.Applied applied:
+                        _messages = [.. applied.CandidateMessages];
+                        yield return new AgentEvent.CompactionCompleted(applied.Report);
+                        break;
+
+                    case CompactionResult.Failed failed:
+                        yield return new AgentEvent.Error(
+                            $"Context compaction failed ({failed.Failure.Kind}): {failed.Failure.Message}");
+                        yield break;
+                }
+            }
 
             // Stream the response — text deltas go to the consumer immediately
             var updates = new List<ChatResponseUpdate>();

@@ -1,4 +1,5 @@
 using Astra.Core;
+using Astra.Core.Compaction;
 using Microsoft.Extensions.AI;
 
 namespace Astra.Cli;
@@ -7,7 +8,10 @@ namespace Astra.Cli;
 /// Console REPL — one of many possible consumers of AgentLoop's event stream.
 /// The same AgentLoop can be driven by HTTP, WebSocket, or any other transport.
 /// </summary>
-public sealed class AgentApp(IChatClient chatClient, IReadOnlyList<ITool> tools)
+public sealed class AgentApp(
+    IChatClient chatClient,
+    IReadOnlyList<ITool> tools,
+    IContextCompactor? contextCompactor = null)
 {
     public async Task RunAsync(CancellationToken ct = default)
     {
@@ -16,7 +20,11 @@ public sealed class AgentApp(IChatClient chatClient, IReadOnlyList<ITool> tools)
         Console.WriteLine("Astra Agent");
         Console.WriteLine("Type a message to start, or 'exit' to quit.\n");
 
-        var loop = new AgentLoop(chatClient, tools, "You are a helpful assistant. Use tools when appropriate.");
+        var loop = new AgentLoop(
+            chatClient,
+            tools,
+            "You are a helpful assistant. Use tools when appropriate.",
+            contextCompactor: contextCompactor);
 
         while (!ct.IsCancellationRequested)
         {
@@ -51,6 +59,14 @@ public sealed class AgentApp(IChatClient chatClient, IReadOnlyList<ITool> tools)
                             var preview = result.Length > 200 ? result[..200] + "..." : result;
                             Console.ForegroundColor = ConsoleColor.DarkGray;
                             Console.WriteLine($"  [result: {preview}]");
+                            Console.ResetColor();
+                            break;
+                        case AgentEvent.CompactionCompleted { Report: var report }:
+                            if (needsNewline) { Console.WriteLine(); needsNewline = false; }
+                            Console.ForegroundColor = ConsoleColor.DarkCyan;
+                            Console.WriteLine(
+                                $"  [compact: {report.Trigger}, {report.TokensBefore:N0} -> {report.TokensAfter:N0} tokens, " +
+                                $"steps={string.Join("+", report.Steps.Select(step => step.GetType().Name))}]");
                             Console.ResetColor();
                             break;
                         case AgentEvent.Error { Message: var msg }:

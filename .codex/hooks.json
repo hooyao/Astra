@@ -1,0 +1,18 @@
+{
+  "description": "Mirror Astra's existing Claude Code progress snapshot for Codex.",
+  "hooks": {
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh -NoProfile -Command \"& (Join-Path (git rev-parse --show-toplevel) '.claude/hooks/save-progress.ps1')\"",
+            "commandWindows": "powershell -ExecutionPolicy Bypass -NoProfile -Command \"& (Join-Path (git rev-parse --show-toplevel) '.claude/hooks/save-progress.ps1')\"",
+            "timeout": 3,
+            "statusMessage": "Saving project progress"
+          }
+        ]
+      }
+    ]
+  }
+}
