@@ -4,6 +4,8 @@ using Astra.Cli;
 using Astra.Cli.Tools;
 using Astra.Core;
 using Astra.Core.Compaction;
+using Astra.Core.Files;
+using Astra.Core.Permissions;
 using Astra.Providers;
 
 var config = new ConfigurationBuilder()
@@ -23,7 +25,33 @@ var llmConfig = new LlmConfig
 
 using var chatClient = ChatClientFactory.Create(llmConfig);
 
-ITool[] tools = [new GetCurrentTimeTool()];
+var workspaceRestrictions = ReadOptions(args, "--workspace");
+var workingDirectorySetting = workspaceRestrictions.FirstOrDefault()
+    ?? config["Tools:WorkingDirectory"];
+var workingDirectory = Path.GetFullPath(
+    string.IsNullOrWhiteSpace(workingDirectorySetting)
+        ? Directory.GetCurrentDirectory()
+        : workingDirectorySetting);
+var fileSystem = new WorkspaceFileSystem(
+    workingDirectory,
+    workspaceRestrictions.Count == 0 ? null : workspaceRestrictions);
+ITool[] tools =
+[
+    new GetCurrentTimeTool(),
+    new ReadFileTool(fileSystem),
+    new GlobTool(fileSystem),
+    new GrepTool(fileSystem),
+    new WriteFileTool(fileSystem),
+    new EditFileTool(fileSystem),
+    new PowerShellTool(
+        fileSystem.BaseDirectory,
+        config["Tools:PowerShellExecutable"]),
+];
+var permissionEngine = new DefaultPermissionEngine(
+    tools.ToDictionary(tool => tool.Name, StringComparer.Ordinal),
+    new ClassDefaultPolicy(),
+    new ConsoleUserConfirmation());
+
 IContextCompactor? contextCompactor = null;
 if (bool.TryParse(config["Compaction:Enabled"], out var compactionEnabled) && compactionEnabled)
 {
@@ -54,7 +82,13 @@ if (bool.TryParse(config["Compaction:Enabled"], out var compactionEnabled) && co
         });
 }
 
-var app = new AgentApp(chatClient, tools, contextCompactor);
+var app = new AgentApp(
+    chatClient,
+    tools,
+    workingDirectory: fileSystem.BaseDirectory,
+    fileAccessDescription: fileSystem.AccessDescription,
+    permissionEngine: permissionEngine,
+    contextCompactor: contextCompactor);
 await app.RunAsync();
 
 static int ReadInt(IConfiguration config, string key, int fallback) =>
@@ -62,3 +96,29 @@ static int ReadInt(IConfiguration config, string key, int fallback) =>
 
 static int? ReadNullableInt(IConfiguration config, string key) =>
     int.TryParse(config[key], out var value) ? value : null;
+
+static IReadOnlyList<string> ReadOptions(string[] arguments, string option)
+{
+    var values = new List<string>();
+    for (var i = 0; i < arguments.Length; i++)
+    {
+        if (string.Equals(arguments[i], option, StringComparison.Ordinal))
+        {
+            if (i + 1 >= arguments.Length || string.IsNullOrWhiteSpace(arguments[i + 1]))
+                throw new ArgumentException($"{option} requires a path.");
+            values.Add(arguments[++i]);
+            continue;
+        }
+
+        var prefix = option + "=";
+        if (arguments[i].StartsWith(prefix, StringComparison.Ordinal))
+        {
+            var value = arguments[i][prefix.Length..];
+            if (string.IsNullOrWhiteSpace(value))
+                throw new ArgumentException($"{option} requires a path.");
+            values.Add(value);
+        }
+    }
+
+    return values;
+}

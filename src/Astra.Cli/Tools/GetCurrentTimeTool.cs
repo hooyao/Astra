@@ -15,6 +15,8 @@ public sealed class GetCurrentTimeTool : ITool
         }
         """).RootElement.Clone();
 
+    public ToolAction Classify(IDictionary<string, object?>? arguments) => ToolAction.Read;
+
     public async IAsyncEnumerable<ToolOutput> ExecuteAsync(
         IDictionary<string, object?>? arguments,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)

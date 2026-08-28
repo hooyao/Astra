@@ -157,6 +157,40 @@ model's emission order is program order). Concurrent tools fan in through one
 `Channel<AgentEvent>`; results map back to the LLM in original call order via
 `CallId`. See `agent/experiments/d03-tool-orchestration/teaching-notes.md`.
 
+**Workspace file tools** are implemented as a post-D7 usability follow-up. The
+public contract follows Claude Code's familiar `Read` / `Write` / `Edit` /
+`Glob` / `Grep` names and core input fields; the implementations share one
+`WorkspaceFileSystem`. By default relative paths resolve from the working
+directory and absolute local paths are unrestricted. One or more repeated
+`--workspace` values opt into a hard multi-root allowlist; lexical traversal and
+symlink escape outside those roots are then rejected. UNC/device paths remain
+unsupported.
+
+`Read` is bounded by line and character limits and preserves LF, CRLF, or CR
+terminators exactly. `Grep` provides bounded regex content/path/count modes with
+line and column locations; `Glob` supports recursive patterns and brace
+alternatives through Microsoft.Extensions.FileSystemGlobbing. Version-control
+metadata and symbolic links are skipped during traversal. `Write` creates
+missing parent directories and atomically creates or completely overwrites a
+UTF-8 file. `Edit` uses exact ordinal replacement, requires one match unless
+`replace_all=true`, and preserves original line terminators and a UTF-8 BOM.
+
+The CLI resolves `Write` and `Edit` actions through `DefaultPermissionEngine` +
+`ConsoleUserConfirmation` (`[y/N]`). `Read`, `Glob`, and `Grep` run without a
+prompt. Tool-level argument validation is implemented; centralized validation
+against each tool's complete `InputSchema` remains deferred. OpenAI's native
+Responses `apply_patch` item is not represented by a same-named JSON function;
+provider-native tool items require a separate transport integration.
+
+**PowerShell tool** is implemented as a dedicated `PowerShellTool`, not by
+nesting PowerShell source inside the Windows `cmd.exe /c` path used by
+`BashTool`. It launches `pwsh` directly with `-NoLogo -NoProfile
+-NonInteractive -Command`, streams stdout/stderr, reports the process exit code,
+and kills/reaps the complete process tree on cancellation. Every invocation is
+classified as `Execute` and therefore requires confirmation. A general shell is
+not constrained by file-tool workspace roots; the confirmation is the explicit
+capability boundary.
+
 **Tool assembly pipeline** (NOT yet implemented — Track D D15, when MCP tools
 exist): base tools → feature gates → permission rules → deny lists → MCP tools →
 sorted (built-in prefix, MCP suffix for cache stability).

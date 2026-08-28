@@ -1,5 +1,6 @@
 using Astra.Core;
 using Astra.Core.Compaction;
+using Astra.Core.Permissions;
 using Microsoft.Extensions.AI;
 
 namespace Astra.Cli;
@@ -11,6 +12,9 @@ namespace Astra.Cli;
 public sealed class AgentApp(
     IChatClient chatClient,
     IReadOnlyList<ITool> tools,
+    string? workingDirectory = null,
+    string? fileAccessDescription = null,
+    IPermissionEngine? permissionEngine = null,
     IContextCompactor? contextCompactor = null)
 {
     public async Task RunAsync(CancellationToken ct = default)
@@ -18,12 +22,20 @@ public sealed class AgentApp(
         Console.InputEncoding = System.Text.Encoding.UTF8;
         Console.OutputEncoding = System.Text.Encoding.UTF8;
         Console.WriteLine("Astra Agent");
+        if (workingDirectory is not null)
+            Console.WriteLine($"Working directory: {workingDirectory}");
+        if (fileAccessDescription is not null)
+            Console.WriteLine($"File access: {fileAccessDescription}");
+        if (tools.Any(tool => tool.Name == "powershell"))
+            Console.WriteLine("PowerShell: enabled; every command requires confirmation and is not constrained by file roots.");
         Console.WriteLine("Type a message to start, or 'exit' to quit.\n");
 
         var loop = new AgentLoop(
             chatClient,
             tools,
-            "You are a helpful assistant. Use tools when appropriate.",
+            "You are Astra, a coding agent. Use Glob and Grep to find files and text, Read to inspect exact content, " +
+            "Edit for targeted changes to existing files, and Write only for new files or intentional complete replacements.",
+            permissionEngine: permissionEngine,
             contextCompactor: contextCompactor);
 
         while (!ct.IsCancellationRequested)
