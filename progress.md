@@ -5,7 +5,7 @@ Branch: codex/d07-compaction
 
 ## Current Work
 
-- Track D Day 7 compaction is complete on top of D6 commit `c45c7c3`; the
+- Track D Day 7 compaction is complete in PR #8 on top of merged D6 PR #7; the
   learner directly inspected and confirmed both payoff paths on 2026-08-28.
 - Added an explicit `CompactionResult` union (`NotNeeded` / `Applied` /
   `Failed`), rough provider-neutral token estimation, allowlisted
@@ -18,32 +18,32 @@ Branch: codex/d07-compaction
   provider paths.
 - Next curriculum step: D8 multi-agent coordinator with isolated worker context,
   condensed summaries, single-threaded writes, and measured token multiple.
-- Existing uncommitted Codex support files (`CLAUDE.md`, `.codex/`, `AGENTS.md`)
-  predate D7 and remain preserved.
+- `CLAUDE.md`, `AGENTS.md`, and `.codex/` were audited together: `CLAUDE.md` is
+  canonical, `AGENTS.md` is a minimal Codex bootstrap, and the Codex hook reuses
+  the existing Claude Code progress hook.
 
 ## Recent Commits
 
-- `3c14866 Sync submodules to latest upstream`
-- `382398c Add reference submodules: claude-reviews-claude and claude-code-compilable`
-- `eb84724 Add .gitignore and remove bin/obj from tracking`
-- `db5d308 Initial commit: project skeleton with Azure OpenAI integration`
+- `814a465 D7: add context compaction pipeline` (PR #8 head before this progress update)
+- `b50dd6b D6: context assembly — three-layer prefix (a/b/c)` (merged PR #7)
+- `e3b52a6 D5: permission pipeline — pluggable policy + confirmation, fail-closed` (merged PR #6)
+- `11b6aed fix(BashTool): complete output channel on stream EOF, not Process.Exited` (merged PR #5)
 
 ## Uncommitted Changes
 
-```
- D7 implementation and tests (see git status)
- pre-existing Codex support changes
-```
+`(clean after committing this progress update)`
 
 ## Source Files
 
 ```
-src/MyClaude.Cli/MyClaude.Cli.csproj
-src/MyClaude.Cli/Program.cs
-src/MyClaude.Cli/appsettings.json
-src/MyClaude.Core/AgentApp.cs
-src/MyClaude.Core/MyClaude.Core.csproj
-src/MyClaude.Providers/ChatClientFactory.cs
-src/MyClaude.Providers/LlmConfig.cs
-src/MyClaude.Providers/MyClaude.Providers.csproj
+src/Astra.Core/AgentLoop.cs
+src/Astra.Core/Compaction/*
+src/Astra.Core/Context/*
+src/Astra.Core/Permissions/*
+src/Astra.Core/ITool.cs
+src/Astra.Core/ToolBatching.cs
+src/Astra.Providers/ChatClientFactory.cs
+src/Astra.Cli/AgentApp.cs
+samples/CompactionDemo/*
+tests/Astra.Core.Tests/*
 ```
