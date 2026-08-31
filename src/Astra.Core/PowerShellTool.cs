@@ -3,6 +3,8 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
+using Astra.Core.Files;
+using Microsoft.Extensions.Options;
 
 namespace Astra.Core;
 
@@ -21,10 +23,33 @@ namespace Astra.Core;
 /// Workspace roots constrain the dedicated file tools, not a general shell. An
 /// approved PowerShell command can access anything permitted to the Astra process.
 /// </remarks>
-public sealed class PowerShellTool : ITool
+public sealed class PowerShellTool : IToolExecutor
 {
+    public const string ToolName = "powershell";
+
+    private static readonly JsonElement Schema = ToolSchema.Parse(
+        """
+        {
+          "type": "object",
+          "properties": {
+            "command": { "type": "string", "description": "PowerShell source text to execute." }
+          },
+          "required": ["command"],
+          "additionalProperties": false
+        }
+        """);
+
     private readonly string _executable;
     private readonly string _workingDirectory;
+
+    public PowerShellTool(
+        WorkspaceFileSystem fileSystem,
+        IOptions<PowerShellOptions> options)
+        : this(
+            fileSystem?.BaseDirectory ?? throw new ArgumentNullException(nameof(fileSystem)),
+            GetConfiguredExecutable(options))
+    {
+    }
 
     public PowerShellTool(string workingDirectory, string? executable = null)
     {
@@ -38,25 +63,20 @@ public sealed class PowerShellTool : ITool
             : executable;
     }
 
-    public string Name => "powershell";
+    public static ToolDefinition CreateDefinition(string workingDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workingDirectory);
+        var fullPath = Path.GetFullPath(workingDirectory);
+        if (!Directory.Exists(fullPath))
+            throw new DirectoryNotFoundException($"PowerShell working directory does not exist: {fullPath}");
 
-    public string Description =>
-        $"Run a local PowerShell command in '{_workingDirectory}'. " +
-        "This general shell is not constrained by file-tool workspace roots and always requires confirmation.";
-
-    public JsonElement InputSchema { get; } = JsonDocument.Parse(
-        """
-        {
-          "type": "object",
-          "properties": {
-            "command": { "type": "string", "description": "PowerShell source text to execute." }
-          },
-          "required": ["command"],
-          "additionalProperties": false
-        }
-        """).RootElement.Clone();
-
-    public ToolAction Classify(IDictionary<string, object?>? arguments) => ToolAction.Execute;
+        return new ToolDefinition(
+            ToolName,
+            $"Run a local PowerShell command in '{fullPath}'. " +
+            "This general shell is not constrained by file-tool workspace roots and always requires confirmation.",
+            Schema,
+            static _ => ToolAction.Execute);
+    }
 
     public async IAsyncEnumerable<ToolOutput> ExecuteAsync(
         IDictionary<string, object?>? arguments,
@@ -169,6 +189,12 @@ public sealed class PowerShellTool : ITool
             "7",
             "pwsh.exe");
         return File.Exists(powerShell7) ? powerShell7 : "powershell.exe";
+    }
+
+    private static string? GetConfiguredExecutable(IOptions<PowerShellOptions> options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return options.Value.PowerShellExecutable;
     }
 
     private sealed record ProcessLine(string Text, bool IsError);

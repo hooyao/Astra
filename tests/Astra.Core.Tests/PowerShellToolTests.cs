@@ -21,7 +21,9 @@ public class PowerShellToolTests
             outputs.Add(output);
         }
 
-        Assert.Equal(ToolAction.Execute, tool.Classify(null));
+        Assert.Equal(
+            ToolAction.Execute,
+            PowerShellTool.CreateDefinition(Path.GetTempPath()).Classify(null));
         Assert.Contains(
             outputs.OfType<ToolOutput.Progress>(),
             output => output.Text == "alpha");

@@ -2,6 +2,7 @@
   <Folder Name="/samples/">
     <Project Path="samples/CompactionDemo/CompactionDemo.csproj" />
     <Project Path="samples/ContextAssemblyDemo/ContextAssemblyDemo.csproj" />
+    <Project Path="samples/MultiAgentDemo/MultiAgentDemo.csproj" />
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/Astra.Cli/Astra.Cli.csproj" />

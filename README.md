@@ -20,7 +20,7 @@ while (true) {               Consumer renders events
 }
 ```
 
-- **Astra.Core** — Agent loop, tool interface, event protocol
+- **Astra.Core** — Agent loop, tool definitions/executors, event protocol
 - **Astra.Providers** — LLM provider adapters (Azure OpenAI, etc.)
 - **Astra.Cli** — Terminal REPL, one of many possible frontends
 
@@ -29,6 +29,10 @@ while (true) {               Consumer renders events
 ```bash
 dotnet run --project src/Astra.Cli
 ```
+
+CLI configuration is bound through strongly typed `IOptions<T>` and validated
+when the scoped runtime graph is created. `Program.cs` contains no section-key
+lookups or manual options construction; `AddAstraCli` owns the DI registrations.
 
 By default, relative paths resolve from the current working directory and
 absolute local paths are unrestricted. Opt into a hard allowlist with one or
@@ -47,9 +51,28 @@ parent directories and writes complete file content, while `Edit` performs a
 unique exact-string replacement by default. Reads preserve original line
 terminators, and edits preserve both line terminators and a UTF-8 BOM.
 
+Tool metadata is immutable and available for model advertisement without an
+executor instance. Built-in executors are keyed transient services: Astra
+creates one only after the model requests that tool and the permission pipeline
+admits the call. Unused and denied tools are never instantiated.
+
 `Write`, `Edit`, and every `powershell` command require interactive
 confirmation. PowerShell is a general process capability and is not constrained
 by file-tool workspace roots.
+
+The CLI also exposes `Agent` for substantial read-only research. Each worker
+gets an independent dependency-injection scope containing its own provider
+client, `AgentLoop`, telemetry, and private history, so it cannot see the
+coordinator conversation. Prompts must therefore be self-contained. Emit
+multiple independent `Agent` calls in one response to run them concurrently.
+Their bounded reports return as escaped task-notification user messages and are
+synthesized in one follow-up turn.
+
+Run the D8 single-agent versus two-worker comparison with:
+
+```powershell
+dotnet run --project samples/MultiAgentDemo -c Release -- --real
+```
 
 ## License
 

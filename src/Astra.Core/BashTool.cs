@@ -13,7 +13,7 @@ namespace Astra.Core;
 /// for "rm -rf": one tool, classification driven by the argument, not by a
 /// subclass.
 ///
-/// SCOPE (D2 v1): <see cref="Classify"/> recognizes a small, deliberately
+/// SCOPE (D2 v1): the static definition classifier recognizes a small, deliberately
 /// incomplete set of command names. A production classifier is a per-command
 /// allowlist engine — Claude Code's git-only read-only table is hundreds of
 /// lines (utils/shell/readOnlyCommandValidation.ts). That belongs to a later
@@ -23,14 +23,11 @@ namespace Astra.Core;
 /// (flag/positional-aware, per-command), and classify compound commands by their
 /// most-dangerous subcommand rather than the first token.
 /// </summary>
-public sealed class BashTool : ITool
+public sealed class BashTool : IToolExecutor
 {
-    public string Name => "bash";
+    public const string ToolName = "bash";
 
-    public string Description =>
-        "Run a shell command and return its combined stdout/stderr output.";
-
-    public JsonElement InputSchema { get; } = JsonDocument.Parse(
+    private static readonly JsonElement Schema = ToolSchema.Parse(
         """
         {
           "type": "object",
@@ -39,7 +36,7 @@ public sealed class BashTool : ITool
           },
           "required": ["command"]
         }
-        """).RootElement.Clone();
+        """);
 
     // --- D2 v1 classification tables -------------------------------------------------
     // Keyed by the command's first bare word. Names only; flags/positionals are a
@@ -60,12 +57,18 @@ public sealed class BashTool : ITool
         "tee", "touch", "mkdir",
     };
 
+    public static ToolDefinition Definition { get; } = new(
+        ToolName,
+        "Run a shell command and return its combined stdout/stderr output.",
+        Schema,
+        Classify);
+
     /// <summary>
     /// Classify the command by behavior. Input-dependent: this is the whole point
     /// of the contract. Precedence is most-dangerous-first so an ambiguous command
     /// never downgrades into a safer bucket.
     /// </summary>
-    public ToolAction Classify(IDictionary<string, object?>? arguments)
+    private static ToolAction Classify(IDictionary<string, object?>? arguments)
     {
         var command = GetCommand(arguments);
         if (string.IsNullOrWhiteSpace(command))
@@ -225,7 +228,7 @@ public sealed class BashTool : ITool
     /// <summary>
     /// Pull the "command" string out of the weakly-typed argument bag. Isolated
     /// here so the stringly-typed access lives in exactly one place and both
-    /// <see cref="Classify"/> and <see cref="ExecuteAsync"/> share it.
+    /// definition classification and <see cref="ExecuteAsync"/> share it.
     /// </summary>
     private static string? GetCommand(IDictionary<string, object?>? arguments)
     {

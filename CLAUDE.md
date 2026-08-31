@@ -97,8 +97,10 @@ The query loop is a `while(true)` state machine. Each iteration yields `AgentEve
 
 ### Tool System
 
-Every tool implements a single non-generic interface. Permission-relevant
-behavior is **classified per-invocation, not encoded in a type hierarchy**:
+Tool advertisement and tool execution have different lifetimes. Immutable
+metadata exists for the agent session, while an executor is activated only for
+an admitted invocation. Permission-relevant behavior is still **classified
+per-invocation, not encoded in a type hierarchy**:
 
 ```csharp
 public enum ToolAction { Read, Write, Execute, Other }   // Other = fail-closed bucket
@@ -109,25 +111,37 @@ public abstract record ToolOutput                         // streamed out of a t
     public sealed record Result(string Text)   : ToolOutput;  // the one complete tool_result, for the LLM
 }
 
-public interface ITool
+public sealed class ToolDefinition
 {
     string Name { get; }
     string Description { get; }
     JsonElement InputSchema { get; }
 
-    // Streaming: yield zero+ Progress for the human, exactly one Result (last) for the LLM.
-    IAsyncEnumerable<ToolOutput> ExecuteAsync(IDictionary<string, object?>? arguments, CancellationToken ct);
+    // Input-dependent and fail-closed; runs without creating an executor.
+    ToolAction Classify(IDictionary<string, object?>? arguments);
+}
 
-    // Input-dependent classification. Default interface method, fail-closed default.
-    ToolAction Classify(IDictionary<string, object?>? arguments) => ToolAction.Other;
+public interface IToolExecutor
+{
+    // Streaming: zero+ Progress for the human, one final Result for the LLM.
+    IAsyncEnumerable<ToolOutput> ExecuteAsync(
+        IDictionary<string, object?>? arguments,
+        CancellationToken ct);
 }
 ```
 
-Key: `Classify` is **input-dependent**, not type-dependent. `BashTool.Classify`
-returns `Read` for `"ls"` and `Execute` for `"rm -rf"` — one type, behavior
-varies by argument. No class hierarchies like `ReadOnlyTool`. The fail-closed
-default (`Other`, the strictest bucket) lives in the interface as a C# default
-interface method, so forgetting to classify is safe, never unsafe.
+Key: `ToolDefinition.Classify` is **input-dependent**, not type-dependent. The
+`BashTool` definition returns `Read` for `"ls"` and `Execute` for `"rm -rf"` —
+one advertised tool, behavior varies by argument. No class hierarchies like
+`ReadOnlyTool`. A missing classifier returns `Other`, the strictest bucket.
+
+All built-in schemas are parsed once into static readonly `JsonElement` values.
+The CLI registers implementations as keyed transient `IToolExecutor` services.
+`AgentLoop` follows this order: definition lookup → classification → permission
+→ executor activation → `ExecuteAsync`. Unknown, unused, and denied tools never
+create executor instances. Executors do not acquire external resources in their
+constructors; files, processes, and buffers are opened inside `ExecuteAsync` and
+released within that invocation.
 
 Why a category (`ToolAction`) instead of three bools (`IsReadOnly` /
 `IsConcurrencySafe` / `IsDestructive`): the bools force every caller to AND/OR
@@ -138,8 +152,10 @@ permissions entirely. A behavior *class* lets a host approve "all reads" once an
 not re-prompt as arguments drift. See `agent/experiments/d02-tool-contract/`
 (in the parent repo) for the verified Claude Code source analysis.
 
-> Status: `ITool` and `BashTool` are implemented (Track D D2). The two-layer
-> permission model is also implemented (D5): `Classify` provides the bulk
+> Status: `ToolDefinition`, `IToolExecutor`, and `BashTool` are implemented.
+> D2's behavioral classification is retained while executor activation is now
+> invocation-time. The two-layer permission model is also implemented (D5):
+> `Classify` provides the bulk
 > behavior class; `ClassDefaultPolicy` layers per-command exceptions on top;
 > `DefaultPermissionEngine` resolves Allow/Deny/Ask through an optional
 > `IUserConfirmation` and fails closed in headless mode. Full `InputSchema`
@@ -250,6 +266,25 @@ Workers have **complete context isolation** — they cannot see the coordinator'
 </task-notification>
 ```
 
+> Status: D8 implements `WorkerReport` / `WorkerCompletion` and one DI-owned
+> execution scope per worker. Each scope contains a scoped `IWorker`, `AgentLoop`,
+> provider client, telemetry wrapper, and private history; it is created only
+> after admission and disposed before terminal completion is published. The
+> session stores and returns one `Task<WorkerCompletion>` and disposal performs
+> cancel-and-join before releasing the scope. The
+> coordinator session separately owns its scoped `AgentLoop`, `WorkerCoordinator`,
+> and `AgentTool`. Additional behavior includes bounded JSON report
+> parsing through a source-generated serializer, targeted cancellation, bounded
+> parallelism, completion batching, and escaped XML notifications. `AgentTool`
+> exposes read-only workers to the CLI; multiple Agent calls in one model
+> response run concurrently through D3's read batch, then the CLI collects the
+> active group outside the main loop and submits one notification batch for
+> synthesis. `WorkerCoordinator` has a global single-writer lane, but
+> write-capable workers remain unexposed until strict file-version and atomic
+> MultiEdit transactions are implemented. `samples/MultiAgentDemo` compares a
+> single agent with two real `gpt-5.6-sol` workers and reports the measured token
+> multiple.
+
 ### Hook System
 
 Hooks intercept tool lifecycle via a language-agnostic JSON protocol:
@@ -279,6 +314,27 @@ Support stdio, SSE, HTTP, and WebSocket transports. MCP tools appear identical t
   - Avoid `Type.GetType()`, `Activator.CreateInstance()`, `Expression.Compile()`
   - Use `[JsonSerializable]` attributes on all serializable types
   - Trim-safe: no trimmer warnings allowed
+
+## Dependency Injection and Configuration
+
+The CLI uses Microsoft.Extensions.DependencyInjection and strongly typed
+Microsoft.Extensions.Options throughout its runtime graph. `Program.cs` only
+selects configuration sources, calls `AddAstraCli`, creates one coordinator
+session scope, and starts `AgentApp`.
+
+Configuration sections bind to `IOptions<LlmConfig>`,
+`IOptions<CompactionOptions>`, `IOptions<WorkspaceOptions>`, and
+`IOptions<PowerShellOptions>`. Validators fail before use, and
+`CompactionOptionsPostConfigure` derives the compaction output reserve from the
+LLM output limit. `Compaction:Enabled=false` keeps the same DI graph and makes
+`ContextCompactor` a cheap explicit no-op; optional service lookup is not used.
+The configuration binding source generator is enabled so Native AOT requires no
+reflection-based binder fallback.
+
+Runtime services use constructor injection, including keyed `AgentLoop` and
+keyed transient tool executors. Do not reintroduce configuration string
+indexers, manually assembled options objects, or `GetService` feature gates in
+the composition root.
 
 ## LLM Provider Abstraction
 

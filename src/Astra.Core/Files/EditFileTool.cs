@@ -5,15 +5,11 @@ using System.Text.Json;
 namespace Astra.Core.Files;
 
 /// <summary>Replace exact text in an existing UTF-8 file inside the workspace.</summary>
-public sealed class EditFileTool(WorkspaceFileSystem fileSystem) : ITool
+public sealed class EditFileTool(WorkspaceFileSystem fileSystem) : IToolExecutor
 {
-    public string Name => "Edit";
+    public const string ToolName = "Edit";
 
-    public string Description =>
-        $"Edit an existing UTF-8 text file ({fileSystem.AccessDescription}) " +
-        "by exact ordinal text replacement. By default old_string must occur exactly once.";
-
-    public JsonElement InputSchema { get; } = JsonDocument.Parse(
+    private static readonly JsonElement Schema = ToolSchema.Parse(
         """
         {
           "type": "object",
@@ -26,9 +22,18 @@ public sealed class EditFileTool(WorkspaceFileSystem fileSystem) : ITool
           "required": ["file_path", "old_string", "new_string"],
           "additionalProperties": false
         }
-        """).RootElement.Clone();
+        """);
 
-    public ToolAction Classify(IDictionary<string, object?>? arguments) => ToolAction.Write;
+    public static ToolDefinition CreateDefinition(WorkspaceFileSystem fileSystem)
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+        return new ToolDefinition(
+            ToolName,
+            $"Edit an existing UTF-8 text file ({fileSystem.AccessDescription}) " +
+            "by exact ordinal text replacement. By default old_string must occur exactly once.",
+            Schema,
+            static _ => ToolAction.Write);
+    }
 
     public async IAsyncEnumerable<ToolOutput> ExecuteAsync(
         IDictionary<string, object?>? arguments,

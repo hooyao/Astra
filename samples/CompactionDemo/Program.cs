@@ -1,8 +1,8 @@
 using System.Runtime.CompilerServices;
-using System.Collections.Immutable;
 using Astra.Core.Compaction;
 using Astra.Providers;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Options;
 
 const string retentionCode = "RETENTION-CODE-7429";
 
@@ -26,7 +26,7 @@ static async Task RunDeterministicMicrocompactAsync()
     var compactor = new ContextCompactor(
         new FixedSummaryClient("must not be called"),
         estimator,
-        new CompactionOptions
+        Options.Create(new CompactionOptions
         {
             ContextWindowTokens = 100_000,
             MaxOutputTokens = 1_000,
@@ -35,9 +35,9 @@ static async Task RunDeterministicMicrocompactAsync()
             AutoCompactThresholdOverrideTokens = 11_000,
             KeepRecentToolResults = 2,
             MinimumMicrocompactSavingsTokens = 1,
-            CompactableToolNames = ImmutableHashSet.Create(
-                StringComparer.Ordinal, "read", "grep", "bash"),
-        });
+            CompactableToolNames = ["read", "grep", "bash"],
+        }),
+        TimeProvider.System);
 
     PrintToolResults("before", messages);
     var result = await compactor.CompactIfNeededAsync(
@@ -62,7 +62,8 @@ static async Task RunDeterministicFullCompactAsync()
     var compactor = new ContextCompactor(
         new FixedSummaryClient(summary),
         estimator,
-        OptionsThatTriggerAt(before));
+        Options.Create(OptionsThatTriggerAt(before)),
+        TimeProvider.System);
 
     var result = await compactor.CompactIfNeededAsync(
         messages, CompactionTrigger.Automatic, CancellationToken.None);
@@ -97,7 +98,11 @@ static async Task RunRealFullCompactAsync()
     var messages = BuildLongConversation();
     var estimator = new RoughChatTokenEstimator();
     var before = estimator.EstimateTokens(messages);
-    var compactor = new ContextCompactor(client, estimator, OptionsThatTriggerAt(before));
+    var compactor = new ContextCompactor(
+        client,
+        estimator,
+        Options.Create(OptionsThatTriggerAt(before)),
+        TimeProvider.System);
 
     var result = await compactor.CompactIfNeededAsync(
         messages, CompactionTrigger.Automatic, CancellationToken.None);

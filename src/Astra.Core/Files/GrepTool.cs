@@ -8,22 +8,17 @@ using System.Text.RegularExpressions;
 namespace Astra.Core.Files;
 
 /// <summary>Search UTF-8 file contents using a Claude Code-compatible core schema.</summary>
-public sealed class GrepTool(WorkspaceFileSystem fileSystem) : ITool
+public sealed class GrepTool(WorkspaceFileSystem fileSystem) : IToolExecutor
 {
+    public const string ToolName = "Grep";
+
     private const int DefaultHeadLimit = 250;
     private const int MaximumHeadLimit = 10_000;
     private const int MaximumOutputCharacters = 20_000;
     private const int MaximumPreviewCharacters = 500;
     private static readonly TimeSpan RegexTimeout = TimeSpan.FromSeconds(2);
 
-    public string Name => "Grep";
-
-    public string Description =>
-        $"Search UTF-8 file contents with a .NET regular expression ({fileSystem.AccessDescription}). " +
-        "The path may be a file or directory. Use output_mode=content to get 1-based line and column " +
-        "before a targeted Read or Edit. Results are bounded and version-control metadata and symbolic links are skipped.";
-
-    public JsonElement InputSchema { get; } = JsonDocument.Parse(
+    private static readonly JsonElement Schema = ToolSchema.Parse(
         """
         {
           "type": "object",
@@ -39,9 +34,19 @@ public sealed class GrepTool(WorkspaceFileSystem fileSystem) : ITool
           "required": ["pattern"],
           "additionalProperties": false
         }
-        """).RootElement.Clone();
+        """);
 
-    public ToolAction Classify(IDictionary<string, object?>? arguments) => ToolAction.Read;
+    public static ToolDefinition CreateDefinition(WorkspaceFileSystem fileSystem)
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+        return new ToolDefinition(
+            ToolName,
+            $"Search UTF-8 file contents with a .NET regular expression ({fileSystem.AccessDescription}). " +
+            "The path may be a file or directory. Use output_mode=content to get 1-based line and column " +
+            "before a targeted Read or Edit. Results are bounded and version-control metadata and symbolic links are skipped.",
+            Schema,
+            static _ => ToolAction.Read);
+    }
 
     public async IAsyncEnumerable<ToolOutput> ExecuteAsync(
         IDictionary<string, object?>? arguments,

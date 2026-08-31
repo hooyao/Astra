@@ -5,15 +5,11 @@ using System.Text.Json;
 namespace Astra.Core.Files;
 
 /// <summary>Create or overwrite a complete UTF-8 text file.</summary>
-public sealed class WriteFileTool(WorkspaceFileSystem fileSystem) : ITool
+public sealed class WriteFileTool(WorkspaceFileSystem fileSystem) : IToolExecutor
 {
-    public string Name => "Write";
+    public const string ToolName = "Write";
 
-    public string Description =>
-        $"Write complete UTF-8 file content ({fileSystem.AccessDescription}). " +
-        "Creates missing parent directories and overwrites an existing file. Prefer Edit for targeted changes.";
-
-    public JsonElement InputSchema { get; } = JsonDocument.Parse(
+    private static readonly JsonElement Schema = ToolSchema.Parse(
         """
         {
           "type": "object",
@@ -24,9 +20,18 @@ public sealed class WriteFileTool(WorkspaceFileSystem fileSystem) : ITool
           "required": ["file_path", "content"],
           "additionalProperties": false
         }
-        """).RootElement.Clone();
+        """);
 
-    public ToolAction Classify(IDictionary<string, object?>? arguments) => ToolAction.Write;
+    public static ToolDefinition CreateDefinition(WorkspaceFileSystem fileSystem)
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+        return new ToolDefinition(
+            ToolName,
+            $"Write complete UTF-8 file content ({fileSystem.AccessDescription}). " +
+            "Creates missing parent directories and overwrites an existing file. Prefer Edit for targeted changes.",
+            Schema,
+            static _ => ToolAction.Write);
+    }
 
     public async IAsyncEnumerable<ToolOutput> ExecuteAsync(
         IDictionary<string, object?>? arguments,

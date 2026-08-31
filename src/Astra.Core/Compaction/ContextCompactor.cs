@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Options;
 
 namespace Astra.Core.Compaction;
 
@@ -36,18 +37,20 @@ public sealed class ContextCompactor : IContextCompactor
     public ContextCompactor(
         IChatClient summaryClient,
         IChatTokenEstimator tokenEstimator,
-        CompactionOptions options,
-        TimeProvider? timeProvider = null)
+        IOptions<CompactionOptions> options,
+        TimeProvider timeProvider)
     {
         ArgumentNullException.ThrowIfNull(summaryClient);
         ArgumentNullException.ThrowIfNull(tokenEstimator);
         ArgumentNullException.ThrowIfNull(options);
-        options.Validate();
+        ArgumentNullException.ThrowIfNull(timeProvider);
+        var configuredOptions = options.Value;
+        configuredOptions.Validate();
 
         _summaryClient = summaryClient;
         _tokenEstimator = tokenEstimator;
-        _options = options;
-        _timeProvider = timeProvider ?? TimeProvider.System;
+        _options = configuredOptions;
+        _timeProvider = timeProvider;
     }
 
     public async ValueTask<CompactionResult> CompactIfNeededAsync(
@@ -57,6 +60,13 @@ public sealed class ContextCompactor : IContextCompactor
     {
         ArgumentNullException.ThrowIfNull(messages);
         ct.ThrowIfCancellationRequested();
+
+        if (!_options.Enabled)
+        {
+            return new CompactionResult.NotNeeded(
+                InputTokens: 0,
+                ThresholdTokens: _options.AutoCompactThresholdTokens);
+        }
 
         var original = messages.ToImmutableArray();
         var tokensBefore = CountTokens(original);

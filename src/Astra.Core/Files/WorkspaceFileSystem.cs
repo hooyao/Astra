@@ -1,4 +1,5 @@
 using System.Text;
+using Microsoft.Extensions.Options;
 
 namespace Astra.Core.Files;
 
@@ -23,6 +24,20 @@ public sealed class WorkspaceFileSystem
     private readonly StringComparison _pathComparison = OperatingSystem.IsWindows()
         ? StringComparison.OrdinalIgnoreCase
         : StringComparison.Ordinal;
+
+    public WorkspaceFileSystem(IOptions<WorkspaceOptions> options)
+        : this(GetOptions(options))
+    {
+    }
+
+    private WorkspaceFileSystem(WorkspaceOptions options)
+        : this(
+            string.IsNullOrWhiteSpace(options.WorkingDirectory)
+                ? Directory.GetCurrentDirectory()
+                : options.WorkingDirectory,
+            options.AllowedRoots)
+    {
+    }
 
     public WorkspaceFileSystem(
         string baseDirectory,
@@ -177,6 +192,12 @@ public sealed class WorkspaceFileSystem
 
     private static IEqualityComparer<string> StringComparerFromPlatform() =>
         OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
+    private static WorkspaceOptions GetOptions(IOptions<WorkspaceOptions> options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return options.Value;
+    }
 
     private static string ResolveExistingLinks(string fullPath, bool finalIsDirectory)
     {

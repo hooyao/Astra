@@ -20,23 +20,26 @@ namespace Astra.Core.Permissions;
 /// </summary>
 /// <remarks>
 /// D5. Layer 1 here is minimal (tool existence). Full JSON-Schema validation of
-/// arguments against <see cref="ITool.InputSchema"/> is a later addition; the seam
+/// arguments against <see cref="ToolDefinition.InputSchema"/> is a later addition; the seam
 /// is here so it slots in without changing the engine's shape.
 /// TODO (permission layer): validate arguments against the tool's InputSchema.
 /// Layers 3 (domain security beyond Classify), 4 (AI classifier), 6 (sandbox), and
 /// 7 (workspace trust) are cited in the reconciliation note and deferred.
 /// </remarks>
-public sealed class DefaultPermissionEngine(
-    IReadOnlyDictionary<string, ITool> tools,
+public class DefaultPermissionEngine(
+    IReadOnlyCollection<ToolDefinition> tools,
     IPermissionPolicy policy,
     IUserConfirmation? confirmation = null) : IPermissionEngine
 {
+    private readonly HashSet<string> _toolNames =
+        tools.Select(tool => tool.Name).ToHashSet(StringComparer.Ordinal);
+
     public async Task<PermissionDecision> CheckAsync(
         FunctionCallContent call, ToolAction action, CancellationToken ct)
     {
         // Layer 1 — input validation. An unknown tool is refused here; the loop
         // also guards this, but permission must not assume a later layer will.
-        if (!tools.ContainsKey(call.Name))
+        if (!_toolNames.Contains(call.Name))
             return new PermissionDecision.Deny($"Unknown tool '{call.Name}'.");
 
         // Layer 2 — policy.

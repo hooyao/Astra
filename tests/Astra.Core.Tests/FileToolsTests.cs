@@ -104,7 +104,7 @@ public sealed class FileToolsTests : IDisposable
             ["limit"] = 2,
         });
 
-        Assert.Equal(ToolAction.Read, tool.Classify(null));
+        Assert.Equal(ToolAction.Read, ReadFileTool.CreateDefinition(_fileSystem).Classify(null));
         Assert.Contains("line-2", result);
         Assert.Contains("line-3", result);
         Assert.DoesNotContain("line-1", result);
@@ -145,7 +145,7 @@ public sealed class FileToolsTests : IDisposable
             ["content"] = string.Empty,
         });
 
-        Assert.Equal(ToolAction.Write, tool.Classify(null));
+        Assert.Equal(ToolAction.Write, WriteFileTool.CreateDefinition(_fileSystem).Classify(null));
         Assert.True(File.Exists(path));
         Assert.Equal(string.Empty, await File.ReadAllTextAsync(path));
 
@@ -256,7 +256,7 @@ public sealed class FileToolsTests : IDisposable
             ["output_mode"] = "content",
         });
 
-        Assert.Equal(ToolAction.Read, tool.Classify(null));
+        Assert.Equal(ToolAction.Read, GrepTool.CreateDefinition(_fileSystem).Classify(null));
         Assert.Contains("Entries returned: 1.", result);
         Assert.Contains("large.txt:23456:8: prefix hello world suffix", result);
     }
@@ -356,7 +356,7 @@ public sealed class FileToolsTests : IDisposable
             ["pattern"] = "**/*.{cs,csproj}",
         });
 
-        Assert.Equal(ToolAction.Read, tool.Classify(null));
+        Assert.Equal(ToolAction.Read, GlobTool.CreateDefinition(_fileSystem).Classify(null));
         Assert.Contains($"src{Path.DirectorySeparatorChar}nested{Path.DirectorySeparatorChar}one.cs", result);
         Assert.Contains($"src{Path.DirectorySeparatorChar}nested{Path.DirectorySeparatorChar}two.csproj", result);
         Assert.DoesNotContain("ignored.txt", result);
@@ -450,7 +450,7 @@ public sealed class FileToolsTests : IDisposable
     }
 
     private static async Task<string> ExecuteAsync(
-        ITool tool,
+        IToolExecutor tool,
         IDictionary<string, object?> arguments)
     {
         var outputs = new List<ToolOutput>();

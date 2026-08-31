@@ -33,15 +33,8 @@ public class AgentLoopOrchestrationTests
     // ran these serially, the second would never start, the first would wait
     // forever, and the test would TIME OUT. Only genuine overlap lets all
     // participants reach the barrier and proceed.
-    private sealed class RendezvousReadTool(string name, Rendezvous rv) : ITool
+    private sealed class RendezvousReadTool(string name, Rendezvous rv) : IToolExecutor
     {
-        public string Name => name;
-        public string Description => "read tool that rendezvous-syncs to prove overlap";
-        public JsonElement InputSchema { get; } =
-            JsonDocument.Parse("{\"type\":\"object\"}").RootElement.Clone();
-
-        public ToolAction Classify(IDictionary<string, object?>? arguments) => ToolAction.Read;
-
         public async IAsyncEnumerable<ToolOutput> ExecuteAsync(
             IDictionary<string, object?>? arguments,
             [EnumeratorCancellation] CancellationToken ct = default)
@@ -53,15 +46,8 @@ public class AgentLoopOrchestrationTests
 
     // A read tool that records its start/end window. No synchronization; safe when
     // a read is alone in its batch.
-    private sealed class RecordingReadTool(string name, List<string> log) : ITool
+    private sealed class RecordingReadTool(string name, List<string> log) : IToolExecutor
     {
-        public string Name => name;
-        public string Description => "read tool that records its window";
-        public JsonElement InputSchema { get; } =
-            JsonDocument.Parse("{\"type\":\"object\"}").RootElement.Clone();
-
-        public ToolAction Classify(IDictionary<string, object?>? arguments) => ToolAction.Read;
-
         public async IAsyncEnumerable<ToolOutput> ExecuteAsync(
             IDictionary<string, object?>? arguments,
             [EnumeratorCancellation] CancellationToken ct = default)
@@ -75,15 +61,8 @@ public class AgentLoopOrchestrationTests
 
     // A write tool that records the wall-clock window it occupied, so we can assert
     // it did not overlap anything (it runs alone in a serial batch).
-    private sealed class RecordingWriteTool(string name, List<string> log) : ITool
+    private sealed class RecordingWriteTool(string name, List<string> log) : IToolExecutor
     {
-        public string Name => name;
-        public string Description => "write tool, runs alone";
-        public JsonElement InputSchema { get; } =
-            JsonDocument.Parse("{\"type\":\"object\"}").RootElement.Clone();
-
-        public ToolAction Classify(IDictionary<string, object?>? arguments) => ToolAction.Write;
-
         public async IAsyncEnumerable<ToolOutput> ExecuteAsync(
             IDictionary<string, object?>? arguments,
             [EnumeratorCancellation] CancellationToken ct = default)
@@ -95,15 +74,8 @@ public class AgentLoopOrchestrationTests
         }
     }
 
-    private sealed class DelayedReadTool(string name, int delayMs) : ITool
+    private sealed class DelayedReadTool(string name, int delayMs) : IToolExecutor
     {
-        public string Name => name;
-        public string Description => "read tool with a fixed delay";
-        public JsonElement InputSchema { get; } =
-            JsonDocument.Parse("{\"type\":\"object\"}").RootElement.Clone();
-
-        public ToolAction Classify(IDictionary<string, object?>? arguments) => ToolAction.Read;
-
         public async IAsyncEnumerable<ToolOutput> ExecuteAsync(
             IDictionary<string, object?>? arguments,
             [EnumeratorCancellation] CancellationToken ct = default)
@@ -148,6 +120,27 @@ public class AgentLoopOrchestrationTests
     private static FunctionCallContent Call(string id, string toolName) =>
         new(id, toolName, new Dictionary<string, object?>());
 
+    private static ToolFixture Tool(
+        string name,
+        ToolAction action,
+        Func<IToolExecutor> activate) =>
+        new(
+            new ToolDefinition(
+                name,
+                $"{action} test tool",
+                ToolSchema.Parse("{\"type\":\"object\"}"),
+                _ => action),
+            activate);
+
+    private static AgentLoop CreateLoop(IChatClient model, IReadOnlyList<ToolFixture> tools)
+    {
+        var byName = tools.ToDictionary(tool => tool.Definition.Name, StringComparer.Ordinal);
+        return new AgentLoop(
+            model,
+            tools.Select(tool => tool.Definition).ToArray(),
+            toolExecutorFactory: new DelegateToolExecutorFactory(name => byName[name].Activate()));
+    }
+
     // ------------------------------------------------------------------
     // TWO reads in one turn must run concurrently. Proven by the rendezvous: the
     // tools only complete if both are in flight at once. A 5s timeout turns an
@@ -157,13 +150,13 @@ public class AgentLoopOrchestrationTests
     public async Task TwoReads_RunConcurrently()
     {
         var rv = new Rendezvous(expected: 2);
-        var tools = new ITool[]
+        ToolFixture[] tools =
         {
-            new RendezvousReadTool("read_a", rv),
-            new RendezvousReadTool("read_b", rv),
+            Tool("read_a", ToolAction.Read, () => new RendezvousReadTool("read_a", rv)),
+            Tool("read_b", ToolAction.Read, () => new RendezvousReadTool("read_b", rv)),
         };
         var model = new MultiToolClient([Call("1", "read_a"), Call("2", "read_b")]);
-        var loop = new AgentLoop(model, tools);
+        var loop = CreateLoop(model, tools);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var events = new List<AgentEvent>();
@@ -186,15 +179,15 @@ public class AgentLoopOrchestrationTests
     public async Task ReadWriteRead_WriteRunsAlone_BarrierNotCrossed()
     {
         var log = new List<string>();
-        var tools = new ITool[]
+        ToolFixture[] tools =
         {
-            new RecordingReadTool("read_a", log),
-            new RecordingWriteTool("write_b", log),
-            new RecordingReadTool("read_c", log),
+            Tool("read_a", ToolAction.Read, () => new RecordingReadTool("read_a", log)),
+            Tool("write_b", ToolAction.Write, () => new RecordingWriteTool("write_b", log)),
+            Tool("read_c", ToolAction.Read, () => new RecordingReadTool("read_c", log)),
         };
         var model = new MultiToolClient(
             [Call("1", "read_a"), Call("2", "write_b"), Call("3", "read_c")]);
-        var loop = new AgentLoop(model, tools);
+        var loop = CreateLoop(model, tools);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         await foreach (var _ in loop.SubmitAsync("go", cts.Token)) { }
@@ -213,13 +206,13 @@ public class AgentLoopOrchestrationTests
     [Fact]
     public async Task Results_MapToCallId_EvenWhenOutOfOrder()
     {
-        var tools = new ITool[]
+        ToolFixture[] tools =
         {
-            new DelayedReadTool("read_slow", delayMs: 50),
-            new DelayedReadTool("read_fast", delayMs: 0),
+            Tool("read_slow", ToolAction.Read, () => new DelayedReadTool("read_slow", delayMs: 50)),
+            Tool("read_fast", ToolAction.Read, () => new DelayedReadTool("read_fast", delayMs: 0)),
         };
         var model = new MultiToolClient([Call("slow-id", "read_slow"), Call("fast-id", "read_fast")]);
-        var loop = new AgentLoop(model, tools);
+        var loop = CreateLoop(model, tools);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var events = new List<AgentEvent>();
@@ -230,4 +223,8 @@ public class AgentLoopOrchestrationTests
         Assert.Equal("read_slow-done", byId["slow-id"]);
         Assert.Equal("read_fast-done", byId["fast-id"]);
     }
+
+    private sealed record ToolFixture(
+        ToolDefinition Definition,
+        Func<IToolExecutor> Activate);
 }

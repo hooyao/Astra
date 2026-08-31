@@ -74,7 +74,7 @@ public class AgentLoopContextTests
         var model = new CapturingChatClient();
         var b = new CountingSessionContext();
         var loop = new AgentLoop(
-            model, tools: [], systemPrompt: "You are Astra.",
+            model, toolDefinitions: [], systemPrompt: "You are Astra.",
             sessionContext: new MemoizedSessionContext(b));
 
         for (var i = 0; i < 3; i++)
@@ -110,7 +110,7 @@ public class AgentLoopContextTests
         var model = new CapturingChatClient();
         var reminder = new PeriodicReminderProvider("REMINDER-TEXT", everyNTurns: 2);
         var loop = new AgentLoop(
-            model, tools: [], systemPrompt: "You are Astra.",
+            model, toolDefinitions: [], systemPrompt: "You are Astra.",
             attachmentProviders: [reminder]);
 
         for (var i = 1; i <= 4; i++)
@@ -163,7 +163,7 @@ public class AgentLoopContextTests
     {
         var model = new CapturingChatClient();
         var loop = new AgentLoop(
-            model, tools: [], systemPrompt: "You are Astra.",
+            model, toolDefinitions: [], systemPrompt: "You are Astra.",
             attachmentProviders: [new FastProvider(), new HangingProvider()],
             attachmentDeadline: TimeSpan.FromMilliseconds(200));
 
@@ -192,7 +192,7 @@ public class AgentLoopContextTests
     public async Task NoProviders_ReproducesPreD6Behavior()
     {
         var model = new CapturingChatClient();
-        var loop = new AgentLoop(model, tools: [], systemPrompt: "You are Astra.");
+        var loop = new AgentLoop(model, toolDefinitions: [], systemPrompt: "You are Astra.");
 
         await foreach (var _ in loop.SubmitAsync("hello")) { }
 

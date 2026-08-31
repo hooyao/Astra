@@ -17,15 +17,9 @@ public class AgentLoopPermissionTests
 {
     // A tool that records whether it was actually executed — the by-construction
     // proof that a denied call never runs.
-    private sealed class SpyTool(string name, ToolAction action) : ITool
+    private sealed class SpyTool(string name) : IToolExecutor
     {
         public int Executions { get; private set; }
-        public string Name => name;
-        public string Description => "spy";
-        public JsonElement InputSchema { get; } =
-            JsonDocument.Parse("{\"type\":\"object\"}").RootElement.Clone();
-
-        public ToolAction Classify(IDictionary<string, object?>? arguments) => action;
 
         public async IAsyncEnumerable<ToolOutput> ExecuteAsync(
             IDictionary<string, object?>? arguments,
@@ -70,6 +64,13 @@ public class AgentLoopPermissionTests
     private static FunctionCallContent Cmd(string tool, string command) =>
         new($"id-{tool}", tool, new Dictionary<string, object?> { ["command"] = command });
 
+    private static ToolDefinition Definition(string name, ToolAction action) =>
+        new(
+            name,
+            "spy",
+            ToolSchema.Parse("{\"type\":\"object\"}"),
+            _ => action);
+
     // ------------------------------------------------------------------
     // [the load-bearing D5 test] A denied call never executes the tool, and the
     // deny reason is returned to the LLM as the tool result.
@@ -77,18 +78,22 @@ public class AgentLoopPermissionTests
     [Fact]
     public async Task DeniedCall_ToolNeverRuns_ReasonFedToLlm()
     {
-        var spy = new SpyTool("bash", ToolAction.Execute);
+        var definition = Definition("bash", ToolAction.Execute);
+        var executors = new CountingExecutorFactory(() => new SpyTool("bash"));
         var policy = new ClassDefaultPolicy([new PermissionRule("bash", RuleBehavior.Deny, "rm")]);
-        var engine = new DefaultPermissionEngine(
-            new Dictionary<string, ITool> { ["bash"] = spy }, policy);
-        var loop = new AgentLoop(new OneToolClient(Cmd("bash", "rm -rf /")), [spy], permissionEngine: engine);
+        var engine = new DefaultPermissionEngine([definition], policy);
+        var loop = new AgentLoop(
+            new OneToolClient(Cmd("bash", "rm -rf /")),
+            [definition],
+            permissionEngine: engine,
+            toolExecutorFactory: executors);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var events = new List<AgentEvent>();
         await foreach (var evt in loop.SubmitAsync("go", cts.Token))
             events.Add(evt);
 
-        Assert.Equal(0, spy.Executions); // the tool body never ran
+        Assert.Equal(0, executors.Activations); // executor was never constructed
         Assert.Contains(events, e => e is AgentEvent.ToolDenied);
         // The deny reason became the tool_result fed back (not a "bash-ran" output).
         var result = events.OfType<AgentEvent.ToolResult>().Single();
@@ -102,17 +107,22 @@ public class AgentLoopPermissionTests
     [Fact]
     public async Task AllowedCall_ToolRuns()
     {
-        var spy = new SpyTool("bash", ToolAction.Read);
-        var engine = new DefaultPermissionEngine(
-            new Dictionary<string, ITool> { ["bash"] = spy }, new ClassDefaultPolicy());
-        var loop = new AgentLoop(new OneToolClient(Cmd("bash", "ls")), [spy], permissionEngine: engine);
+        var definition = Definition("bash", ToolAction.Read);
+        var executors = new CountingExecutorFactory(() => new SpyTool("bash"));
+        var engine = new DefaultPermissionEngine([definition], new ClassDefaultPolicy());
+        var loop = new AgentLoop(
+            new OneToolClient(Cmd("bash", "ls")),
+            [definition],
+            permissionEngine: engine,
+            toolExecutorFactory: executors);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var events = new List<AgentEvent>();
         await foreach (var evt in loop.SubmitAsync("go", cts.Token))
             events.Add(evt);
 
-        Assert.Equal(1, spy.Executions);
+        Assert.Equal(1, executors.Activations);
+        Assert.Equal(1, Assert.Single(executors.Instances).Executions);
         Assert.DoesNotContain(events, e => e is AgentEvent.ToolDenied);
         Assert.Contains("bash-ran", events.OfType<AgentEvent.ToolResult>().Single().Result);
     }
@@ -123,19 +133,24 @@ public class AgentLoopPermissionTests
     [Fact]
     public async Task AskDeclined_ToolNeverRuns()
     {
-        var spy = new SpyTool("bash", ToolAction.Execute);
+        var definition = Definition("bash", ToolAction.Execute);
+        var executors = new CountingExecutorFactory(() => new SpyTool("bash"));
         var engine = new DefaultPermissionEngine(
-            new Dictionary<string, ITool> { ["bash"] = spy },
+            [definition],
             new ClassDefaultPolicy(),
             new FixedConfirmation(answer: false));
-        var loop = new AgentLoop(new OneToolClient(Cmd("bash", "rm -rf /")), [spy], permissionEngine: engine);
+        var loop = new AgentLoop(
+            new OneToolClient(Cmd("bash", "rm -rf /")),
+            [definition],
+            permissionEngine: engine,
+            toolExecutorFactory: executors);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var events = new List<AgentEvent>();
         await foreach (var evt in loop.SubmitAsync("go", cts.Token))
             events.Add(evt);
 
-        Assert.Equal(0, spy.Executions);
+        Assert.Equal(0, executors.Activations);
         Assert.Contains(events, e => e is AgentEvent.ToolDenied);
     }
 
@@ -146,12 +161,50 @@ public class AgentLoopPermissionTests
     [Fact]
     public async Task NoEngine_Unguarded_ToolRuns()
     {
-        var spy = new SpyTool("bash", ToolAction.Execute);
-        var loop = new AgentLoop(new OneToolClient(Cmd("bash", "rm -rf /")), [spy]); // no engine
+        var definition = Definition("bash", ToolAction.Execute);
+        var executors = new CountingExecutorFactory(() => new SpyTool("bash"));
+        var loop = new AgentLoop(
+            new OneToolClient(Cmd("bash", "rm -rf /")),
+            [definition],
+            toolExecutorFactory: executors); // no engine
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         await foreach (var _ in loop.SubmitAsync("go", cts.Token)) { }
 
-        Assert.Equal(1, spy.Executions); // unguarded: ran despite being an Execute
+        Assert.Equal(1, executors.Activations); // unguarded: ran despite being an Execute
+    }
+
+    [Fact]
+    public async Task Executor_IsActivatedOnlyWhenCalled_AndOncePerInvocation()
+    {
+        var definition = Definition("bash", ToolAction.Read);
+        var executors = new CountingExecutorFactory(() => new SpyTool("bash"));
+        var loop = new AgentLoop(
+            new OneToolClient(Cmd("bash", "ls")),
+            [definition],
+            toolExecutorFactory: executors);
+
+        Assert.Equal(0, executors.Activations);
+
+        await foreach (var _ in loop.SubmitAsync("first")) { }
+        await foreach (var _ in loop.SubmitAsync("second")) { }
+
+        Assert.Equal(2, executors.Activations);
+        Assert.Equal(2, executors.Instances.Count);
+        Assert.NotSame(executors.Instances[0], executors.Instances[1]);
+    }
+
+    private sealed class CountingExecutorFactory(
+        Func<SpyTool> factory) : IToolExecutorFactory
+    {
+        public List<SpyTool> Instances { get; } = [];
+        public int Activations => Instances.Count;
+
+        public IToolExecutor Create(string toolName)
+        {
+            var executor = factory();
+            Instances.Add(executor);
+            return executor;
+        }
     }
 }

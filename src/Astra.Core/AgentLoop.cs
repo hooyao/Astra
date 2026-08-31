@@ -28,15 +28,16 @@ namespace Astra.Core;
 /// prompt, no attachments), so existing callers/tests are unaffected.
 /// See agent/experiments/d06-context-assembly/source-reconciliation.md.
 /// </remarks>
-public sealed class AgentLoop(
+public class AgentLoop(
     IChatClient chatClient,
-    IReadOnlyList<ITool> tools,
+    IReadOnlyList<ToolDefinition> toolDefinitions,
     string? systemPrompt = null,
     IPermissionEngine? permissionEngine = null,
     ISessionContextProvider? sessionContext = null,
     IReadOnlyList<IAttachmentProvider>? attachmentProviders = null,
     TimeSpan? attachmentDeadline = null,
-    IContextCompactor? contextCompactor = null)
+    IContextCompactor? contextCompactor = null,
+    IToolExecutorFactory? toolExecutorFactory = null)
 {
     /// <summary>
     /// Upper bound on tools running at once inside a single concurrent (read) batch.
@@ -46,8 +47,12 @@ public sealed class AgentLoop(
     /// </summary>
     private const int MaxConcurrentTools = 10;
 
-    private readonly Dictionary<string, ITool> _toolMap = tools.ToDictionary(t => t.Name);
-    private readonly List<AITool> _aiTools = tools.Select(t => (AITool)new ToolAIFunction(t)).ToList();
+    private readonly Dictionary<string, ToolDefinition> _toolMap =
+        toolDefinitions.ToDictionary(definition => definition.Name, StringComparer.Ordinal);
+    private readonly List<AITool> _aiTools =
+        toolDefinitions.Select(definition => (AITool)new ToolAIFunction(definition)).ToList();
+    private readonly IToolExecutorFactory? _toolExecutorFactory =
+        RequireExecutorFactory(toolDefinitions, toolExecutorFactory);
 
     // Layer c: the per-turn attachment gatherer (null when no providers were supplied).
     // Default deadline mirrors Claude Code's getAttachments() 1-second AbortController.
@@ -89,9 +94,25 @@ public sealed class AgentLoop(
             _messages.Insert(0, new ChatMessage(ChatRole.System, prefix));
     }
 
-    public async IAsyncEnumerable<AgentEvent> SubmitAsync(
+    public IAsyncEnumerable<AgentEvent> SubmitAsync(
         string userMessage,
-        [EnumeratorCancellation] CancellationToken ct = default)
+        CancellationToken ct = default) =>
+        SubmitCoreAsync(userMessage, turnOptions: null, ct);
+
+    public IAsyncEnumerable<AgentEvent> SubmitAsync(
+        string userMessage,
+        AgentTurnOptions turnOptions,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(turnOptions);
+        turnOptions.Validate();
+        return SubmitCoreAsync(userMessage, turnOptions, ct);
+    }
+
+    private async IAsyncEnumerable<AgentEvent> SubmitCoreAsync(
+        string userMessage,
+        AgentTurnOptions? turnOptions,
+        [EnumeratorCancellation] CancellationToken ct)
     {
         // Layer a + b: assemble the byte-stable system prefix once, before the first turn.
         await EnsureSystemAssembledAsync(ct);
@@ -113,7 +134,7 @@ public sealed class AgentLoop(
 
         _messages.Add(new ChatMessage(ChatRole.User, userContent));
 
-        var options = new ChatOptions();
+        var options = new ChatOptions { MaxOutputTokens = turnOptions?.MaxOutputTokens };
         if (_aiTools.Count > 0)
             options.Tools = _aiTools;
 
@@ -231,8 +252,8 @@ public sealed class AgentLoop(
     /// so it runs alone.
     /// </summary>
     private ToolAction ClassifyCall(FunctionCallContent call) =>
-        _toolMap.TryGetValue(call.Name, out var tool)
-            ? tool.Classify(call.Arguments)
+        _toolMap.TryGetValue(call.Name, out var definition)
+            ? definition.Classify(call.Arguments)
             : ToolAction.Other;
 
     /// <summary>
@@ -287,7 +308,7 @@ public sealed class AgentLoop(
         ConcurrentDictionary<string, AIContent> results,
         CancellationToken ct)
     {
-        if (!_toolMap.TryGetValue(call.Name, out var tool))
+        if (!_toolMap.TryGetValue(call.Name, out var definition))
         {
             var unknown = $"Error: unknown tool '{call.Name}'";
             results[call.CallId] = new FunctionResultContent(call.CallId, unknown);
@@ -304,7 +325,7 @@ public sealed class AgentLoop(
         IDictionary<string, object?>? effectiveArgs = call.Arguments;
         if (permissionEngine is not null)
         {
-            var decision = await permissionEngine.CheckAsync(call, ClassifyCall(call), ct);
+            var decision = await permissionEngine.CheckAsync(call, definition.Classify(call.Arguments), ct);
             if (decision is PermissionDecision.Deny(var reason))
             {
                 results[call.CallId] = new FunctionResultContent(call.CallId, reason);
@@ -319,7 +340,10 @@ public sealed class AgentLoop(
         string? finalResult = null;
         try
         {
-            await foreach (var output in tool.ExecuteAsync(effectiveArgs, ct).WithCancellation(ct))
+            // Activation is deliberately after permission. Unused, unknown, and
+            // denied tools never create executor instances.
+            var executor = _toolExecutorFactory!.Create(call.Name);
+            await foreach (var output in executor.ExecuteAsync(effectiveArgs, ct).WithCancellation(ct))
             {
                 if (output is ToolOutput.Progress(var text))
                     await writer.WriteAsync(new AgentEvent.ToolProgress(call.Name, call.CallId, text), ct);
@@ -348,16 +372,16 @@ public sealed class AgentLoop(
     }
 
     /// <summary>
-    /// Adapts an ITool to AIFunction for the M.E.AI wire protocol — advertisement only
+    /// Adapts immutable metadata to AIFunction for the M.E.AI wire protocol.
     /// (Name/Description/JsonSchema serialized into the request). Execution is NOT routed
     /// through here: the agent loop dispatches tools manually so that permission checks,
     /// read/write partitioning, and compaction hooks all have a seam to attach to.
     /// </summary>
-    private sealed class ToolAIFunction(ITool tool) : AIFunction
+    private sealed class ToolAIFunction(ToolDefinition definition) : AIFunction
     {
-        public override string Name => tool.Name;
-        public override string Description => tool.Description;
-        public override JsonElement JsonSchema => tool.InputSchema;
+        public override string Name => definition.Name;
+        public override string Description => definition.Description;
+        public override JsonElement JsonSchema => definition.InputSchema;
 
         // AIFunction forces this override, but Astra never uses SDK auto-invocation.
         // Fail closed: if a middleware ever wakes this path, surface it loudly rather
@@ -367,5 +391,20 @@ public sealed class AgentLoop(
             CancellationToken cancellationToken) =>
             throw new NotSupportedException(
                 "Tools are dispatched manually by AgentLoop; auto-invocation is intentionally disabled.");
+    }
+
+    private static IToolExecutorFactory? RequireExecutorFactory(
+        IReadOnlyList<ToolDefinition> definitions,
+        IToolExecutorFactory? factory)
+    {
+        ArgumentNullException.ThrowIfNull(definitions);
+        if (definitions.Count > 0 && factory is null)
+        {
+            throw new ArgumentNullException(
+                nameof(toolExecutorFactory),
+                "A tool executor factory is required when tool definitions are advertised.");
+        }
+
+        return factory;
     }
 }

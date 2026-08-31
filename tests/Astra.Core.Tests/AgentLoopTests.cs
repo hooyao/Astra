@@ -60,13 +60,15 @@ internal sealed class ScriptedChatClient : IChatClient
 /// A trivial deterministic tool so the tool_use path has something to dispatch to.
 /// Streams a single Result chunk (no Progress) — the minimal well-behaved tool.
 /// </summary>
-internal sealed class FakeTimeTool : ITool
+internal sealed class FakeTimeTool : IToolExecutor
 {
-    public string Name => "get_current_time";
-    public string Description => "Get the current time.";
+    public const string ToolName = "get_current_time";
 
-    public JsonElement InputSchema { get; } =
-        JsonDocument.Parse("{\"type\":\"object\",\"properties\":{}}").RootElement.Clone();
+    public static ToolDefinition Definition { get; } = new(
+        ToolName,
+        "Get the current time.",
+        ToolSchema.Parse("{\"type\":\"object\",\"properties\":{}}"),
+        static _ => ToolAction.Read);
 
     public async IAsyncEnumerable<ToolOutput> ExecuteAsync(
         IDictionary<string, object?>? arguments,
@@ -116,7 +118,7 @@ public class AgentLoopTests
     public async Task TextOnlyResponse_TerminatesOnEndTurn()
     {
         var model = new TextOnlyChatClient();
-        var loop = new AgentLoop(model, tools: []);
+        var loop = new AgentLoop(model, toolDefinitions: []);
 
         var events = new List<AgentEvent>();
         await foreach (var evt in loop.SubmitAsync("hi"))
@@ -139,7 +141,10 @@ public class AgentLoopTests
     public async Task ToolUseThenText_RunsTwoRoundTrips_AndEndsOnText()
     {
         var model = new ScriptedChatClient();
-        var loop = new AgentLoop(model, tools: [new FakeTimeTool()]);
+        var loop = new AgentLoop(
+            model,
+            [FakeTimeTool.Definition],
+            toolExecutorFactory: new DelegateToolExecutorFactory(_ => new FakeTimeTool()));
 
         var events = new List<AgentEvent>();
         await foreach (var evt in loop.SubmitAsync("what time is it?"))
