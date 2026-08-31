@@ -2,9 +2,11 @@ namespace Astra.Providers;
 
 public sealed class LlmConfig
 {
-    public required string Provider { get; init; }
-    public required string Endpoint { get; init; }
-    public required string ApiKey { get; init; }
-    public required string DeploymentName { get; init; }
-    public int MaxOutputTokens { get; init; } = 10_000;
+    public const string SectionName = "Llm";
+
+    public string Provider { get; set; } = "AzureOpenAI";
+    public string Endpoint { get; set; } = string.Empty;
+    public string ApiKey { get; set; } = string.Empty;
+    public string DeploymentName { get; set; } = string.Empty;
+    public int MaxOutputTokens { get; set; } = 10_000;
 }

@@ -14,22 +14,6 @@ namespace Astra.Core.Tests;
 /// </summary>
 public class DefaultPermissionEngineTests
 {
-    // A do-nothing tool, just to populate the tool map for Layer-1 existence checks.
-    private sealed class StubTool(string name) : ITool
-    {
-        public string Name => name;
-        public string Description => "stub";
-        public JsonElement InputSchema { get; } =
-            JsonDocument.Parse("{\"type\":\"object\"}").RootElement.Clone();
-        public async IAsyncEnumerable<ToolOutput> ExecuteAsync(
-            IDictionary<string, object?>? arguments,
-            [EnumeratorCancellation] CancellationToken ct = default)
-        {
-            await Task.CompletedTask;
-            yield return new ToolOutput.Result("ok");
-        }
-    }
-
     // A confirmer with a fixed answer, recording whether it was consulted.
     private sealed class FakeConfirmation(bool answer) : IUserConfirmation
     {
@@ -41,8 +25,11 @@ public class DefaultPermissionEngineTests
         }
     }
 
-    private static IReadOnlyDictionary<string, ITool> Tools(params string[] names) =>
-        names.ToDictionary(n => n, n => (ITool)new StubTool(n));
+    private static IReadOnlyCollection<ToolDefinition> Tools(params string[] names) =>
+        names.Select(name => new ToolDefinition(
+            name,
+            "stub",
+            ToolSchema.Parse("{\"type\":\"object\"}"))).ToArray();
 
     private static FunctionCallContent Call(string tool, string? command = null)
     {

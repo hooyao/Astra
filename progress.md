@@ -1,12 +1,72 @@
 ﻿# Project Progress
 
-Last updated: 2026-08-28
-Branch: codex/file-tools
+Last updated: 2026-08-31
+Branch: codex/d08-multi-agent
 
 ## Current Work
 
+- D8 multi-agent coordination is implemented and assistant-verified; the
+  learner-run payoff remains pending. `AgentTool` starts read-only workers with
+  clean `AgentLoop` instances, and the CLI batches their terminal reports into
+  one escaped user-role notification before synthesis.
+- Replaced the implicitly reentrant shared `IWorkerRunner` with explicit
+  dependency-injection ownership. `WorkerCoordinator` now holds only an
+  `IWorkerSessionFactory`; every admitted worker gets an independent async scope
+  containing scoped `IWorker`, `AgentLoop`, provider client, telemetry, and
+  private state. Queued workers do not allocate scopes, and each scope is
+  disposed before its terminal completion becomes observable. The coordinator
+  graph is a separate conversation scope.
+- Worker/session execution now uses `Task<WorkerCompletion>` because it is a
+  long-running operation whose handle must survive for disposal. The session
+  stores and returns the same Task, owns a linked lifetime cancellation source,
+  and performs cancel-and-join before scope disposal. This removes the former
+  `ValueTask -> Task -> ValueTask` conversion without losing lifecycle control.
+- Post-refactor real `gpt-5.6-sol` verification completed both scoped workers
+  with actual overlap and no isolation-marker leak. Single-agent: 156,501
+  tokens/31.0s; multi-agent: 271,691 tokens/60.1s = 1.74x tokens and 1.94x
+  slower. Together with the earlier 0.97x-token run, this shows material
+  stochastic tool-use variance while the latency conclusion remains stable.
+- Split tool advertisement from execution. `AgentLoop` now retains immutable
+  `ToolDefinition` values only; built-in schemas are static readonly, and the
+  CLI resolves keyed transient `IToolExecutor` instances after classification
+  and permission. Unknown, unused, and denied tools allocate no executor.
+  Focused tests prove schema advertisement with zero activation, denial with
+  zero activation, and a distinct executor for every admitted invocation.
+- Real post-activation `gpt-5.6-sol` verification successfully exercised
+  `Glob`, `Grep`, `Read`, and `Agent`; both workers completed and the isolation
+  marker stayed absent. The 7.67x-token/1.86x-wall sample reflects an unusually
+  short eight-tool-call baseline and is retained as an integration check, not a
+  stable cost estimate.
+- Replaced CLI configuration indexers and manual options construction with
+  strongly typed `IOptions<T>` binding for LLM, compaction, workspace, and
+  PowerShell settings. `ConfiguredChatClient`, `ContextCompactor`,
+  `WorkspaceFileSystem`, and `PowerShellTool` receive options through constructor
+  injection. `CompactionOptionsPostConfigure` derives its output reserve from
+  LLM options, while `Enabled=false` is an explicit no-op rather than an absent
+  service. `Program.cs` now contains only configuration sources, `AddAstraCli`,
+  session-scope creation, and app startup.
+- Added typed `WorkerReport` / `WorkerCompletion` contracts, source-generated
+  JSON parsing, provider usage aggregation, bounded parallelism, targeted
+  cancellation, exactly-once completion fan-in, and a global single-writer
+  lane. Invalid reports and exception text are bounded without leaking private
+  worker transcripts.
+- Twelve focused tests cover context isolation, trusted usage, invalid reports,
+  actual read overlap, serialized writers, targeted cancellation, completion
+  batching, XML injection escaping, bounded failures, per-worker scope identity
+  and disposal, admission-time scope creation, and end-to-end `Agent -> two
+  workers -> one synthesis batch` behavior.
+- Verification after D8: 112/112 tests, formatter clean, zero-warning Release
+  build, and Native AOT publish successful.
+- Real `gpt-5.6-sol` payoff: the single agent used 130,251 tokens and 29.7s;
+  coordinator plus two workers used 126,416 tokens and 66.3s. The measured token
+  multiple was 0.97x and wall time was 2.24x slower. The narrow task did not
+  justify multi-agent overhead; the coordinator-only sentinel did not leak.
+- Write-capable workers are not exposed in the CLI. The writer lane is present,
+  but the learner chose strict stale-version conflicts and atomic same-response
+  MultiEdit normalization; those file transaction mechanics must land before
+  enabling worker writes.
 - Post-D7 usability follow-up is implemented on branch `codex/file-tools` and
-  is ready for review. The portable file-tool contract now follows Claude
+  merged via PR #9. The portable file-tool contract follows Claude
   Code's familiar `Read` / `Write` / `Edit` / `Glob` / `Grep` names and core
   fields. `Write` and `Edit` use the CLI `[y/N]` permission gate; all discovery
   tools classify as Read.
@@ -63,37 +123,44 @@ Branch: codex/file-tools
 - Verification: 70/70 tests, formatting clean, solution build clean, Native AOT
   publish clean. `samples/CompactionDemo` verifies both deterministic and real
   provider paths.
-- Next curriculum step: D8 multi-agent coordinator with isolated worker context,
-  condensed summaries, single-threaded writes, and measured token multiple.
+- Next curriculum step: the learner runs `samples/MultiAgentDemo --real`, reads
+  the token/wall-time comparison, and confirms the payoff before D8 is marked
+  complete.
 - `CLAUDE.md`, `AGENTS.md`, and `.codex/` were audited together: `CLAUDE.md` is
   canonical, `AGENTS.md` is a minimal Codex bootstrap, and the Codex hook reuses
   the existing Claude Code progress hook.
 
 ## Recent Commits
 
+- `cffdf7a feat: add coding file and PowerShell tools` (merged PR #9)
 - `814a465 D7: add context compaction pipeline` (PR #8 head before this progress update)
 - `b50dd6b D6: context assembly — three-layer prefix (a/b/c)` (merged PR #7)
 - `e3b52a6 D5: permission pipeline — pluggable policy + confirmation, fail-closed` (merged PR #6)
 - `11b6aed fix(BashTool): complete output channel on stream EOF, not Process.Exited` (merged PR #5)
 
-## Uncommitted Changes
+## Pending Merge
 
-`(clean after committing this progress update)`
+The `codex/d08-multi-agent` branch contains the D8 coordination core, CLI
+`Agent` integration, invocation-time tool activation, strongly typed options
+and dependency-injection wiring, tests, `MultiAgentDemo`, and the accompanying
+documentation. It is ready to merge after review.
 
 ## Source Files
 
 ```
 src/Astra.Core/AgentLoop.cs
 src/Astra.Core/Compaction/*
+src/Astra.Core/Coordination/*
 src/Astra.Core/Context/*
 src/Astra.Core/Files/*
 src/Astra.Core/Permissions/*
 src/Astra.Core/PowerShellTool.cs
-src/Astra.Core/ITool.cs
+src/Astra.Core/ToolContracts.cs
 src/Astra.Core/ToolBatching.cs
 src/Astra.Providers/ChatClientFactory.cs
 src/Astra.Cli/AgentApp.cs
 src/Astra.Cli/Program.cs
 samples/CompactionDemo/*
+samples/MultiAgentDemo/*
 tests/Astra.Core.Tests/*
 ```

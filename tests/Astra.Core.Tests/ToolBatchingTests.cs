@@ -16,9 +16,9 @@ public class ToolBatchingTests
     private static FunctionCallContent Call(string id, string command) =>
         new(id, "bash", new Dictionary<string, object?> { ["command"] = command });
 
-    // Classify via a real BashTool, exactly as the loop does.
-    private static readonly BashTool Bash = new();
-    private static ToolAction Classify(FunctionCallContent c) => Bash.Classify(c.Arguments);
+    // Classify through immutable metadata without activating BashTool.
+    private static ToolAction Classify(FunctionCallContent c) =>
+        BashTool.Definition.Classify(c.Arguments);
 
     // ------------------------------------------------------------------
     // [read, read, write] -> one concurrent batch of the two reads, then a

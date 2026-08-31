@@ -3,19 +3,22 @@ using Astra.Core;
 
 namespace Astra.Cli.Tools;
 
-public sealed class GetCurrentTimeTool : ITool
+public sealed class GetCurrentTimeTool : IToolExecutor
 {
-    public string Name => "get_current_time";
-    public string Description => "Get the current date and time in the local timezone.";
+    public const string ToolName = "get_current_time";
 
-    public JsonElement InputSchema { get; } = JsonDocument.Parse("""
+    private static readonly JsonElement Schema = ToolSchema.Parse("""
         {
             "type": "object",
             "properties": {}
         }
-        """).RootElement.Clone();
+        """);
 
-    public ToolAction Classify(IDictionary<string, object?>? arguments) => ToolAction.Read;
+    public static ToolDefinition Definition { get; } = new(
+        ToolName,
+        "Get the current date and time in the local timezone.",
+        Schema,
+        static _ => ToolAction.Read);
 
     public async IAsyncEnumerable<ToolOutput> ExecuteAsync(
         IDictionary<string, object?>? arguments,

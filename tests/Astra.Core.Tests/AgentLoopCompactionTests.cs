@@ -57,14 +57,13 @@ public class AgentLoopCompactionTests
         public void Dispose() { }
     }
 
-    private sealed class LargeReadTool : ITool
+    private sealed class LargeReadTool : IToolExecutor
     {
-        public string Name => "large_read";
-        public string Description => "Return a large deterministic result.";
-        public System.Text.Json.JsonElement InputSchema { get; } =
-            System.Text.Json.JsonDocument.Parse("{\"type\":\"object\"}").RootElement.Clone();
-
-        public ToolAction Classify(IDictionary<string, object?>? arguments) => ToolAction.Read;
+        public static ToolDefinition Definition { get; } = new(
+            "large_read",
+            "Return a large deterministic result.",
+            ToolSchema.Parse("{\"type\":\"object\"}"),
+            static _ => ToolAction.Read);
 
         public async IAsyncEnumerable<ToolOutput> ExecuteAsync(
             IDictionary<string, object?>? arguments,
@@ -82,8 +81,9 @@ public class AgentLoopCompactionTests
         var compactor = new CountingCompactor();
         var loop = new AgentLoop(
             model,
-            [new LargeReadTool()],
-            contextCompactor: compactor);
+            [LargeReadTool.Definition],
+            contextCompactor: compactor,
+            toolExecutorFactory: new DelegateToolExecutorFactory(_ => new LargeReadTool()));
 
         await foreach (var _ in loop.SubmitAsync("read it")) { }
 
@@ -115,7 +115,11 @@ public class AgentLoopCompactionTests
                 ? new CompactionResult.Applied(candidate, report)
                 : new CompactionResult.NotNeeded(100, 800),
         };
-        var loop = new AgentLoop(model, [new LargeReadTool()], contextCompactor: compactor);
+        var loop = new AgentLoop(
+            model,
+            [LargeReadTool.Definition],
+            contextCompactor: compactor,
+            toolExecutorFactory: new DelegateToolExecutorFactory(_ => new LargeReadTool()));
 
         var events = new List<AgentEvent>();
         await foreach (var evt in loop.SubmitAsync("original-user"))

@@ -4,18 +4,13 @@ using System.Text.Json;
 namespace Astra.Core.Files;
 
 /// <summary>Find files by a familiar coding-agent glob contract.</summary>
-public sealed class GlobTool(WorkspaceFileSystem fileSystem) : ITool
+public sealed class GlobTool(WorkspaceFileSystem fileSystem) : IToolExecutor
 {
+    public const string ToolName = "Glob";
+
     private const int MaximumResults = 100;
 
-    public string Name => "Glob";
-
-    public string Description =>
-        $"Find files by glob pattern ({fileSystem.AccessDescription}). " +
-        "Supports *, **, ?, and brace alternatives such as *.{{cs,csproj}}. " +
-        $"Returns at most {MaximumResults} files and skips version-control metadata and symbolic links.";
-
-    public JsonElement InputSchema { get; } = JsonDocument.Parse(
+    private static readonly JsonElement Schema = ToolSchema.Parse(
         """
         {
           "type": "object",
@@ -26,9 +21,19 @@ public sealed class GlobTool(WorkspaceFileSystem fileSystem) : ITool
           "required": ["pattern"],
           "additionalProperties": false
         }
-        """).RootElement.Clone();
+        """);
 
-    public ToolAction Classify(IDictionary<string, object?>? arguments) => ToolAction.Read;
+    public static ToolDefinition CreateDefinition(WorkspaceFileSystem fileSystem)
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+        return new ToolDefinition(
+            ToolName,
+            $"Find files by glob pattern ({fileSystem.AccessDescription}). " +
+            "Supports *, **, ?, and brace alternatives such as *.{{cs,csproj}}. " +
+            $"Returns at most {MaximumResults} files and skips version-control metadata and symbolic links.",
+            Schema,
+            static _ => ToolAction.Read);
+    }
 
     public async IAsyncEnumerable<ToolOutput> ExecuteAsync(
         IDictionary<string, object?>? arguments,

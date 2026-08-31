@@ -30,7 +30,7 @@ Console.WriteLine("PART 1: a (system prompt) + b (REAL git status, memoized) acr
 
 var model1 = new CapturingClient();
 var loop1 = new AgentLoop(
-    model1, tools: [], systemPrompt: "You are Astra, a coding agent.",
+    model1, toolDefinitions: [], systemPrompt: "You are Astra, a coding agent.",
     sessionContext: new MemoizedSessionContext(new GitStatusContextProvider()));
 
 for (var i = 1; i <= 3; i++)
@@ -56,7 +56,7 @@ Console.WriteLine("\n\nPART 2: c (periodic reminder every 2 turns) rides the use
 
 var model2 = new CapturingClient();
 var loop2 = new AgentLoop(
-    model2, tools: [], systemPrompt: "You are Astra.",
+    model2, toolDefinitions: [], systemPrompt: "You are Astra.",
     attachmentProviders: [new PeriodicReminderProvider("[reminder] track your tasks", everyNTurns: 2)]);
 
 for (var i = 1; i <= 4; i++)
@@ -78,7 +78,7 @@ Console.WriteLine("\n\nPART 3: c timeout — a hung provider (30s) dropped at a 
 
 var model3 = new CapturingClient();
 var loop3 = new AgentLoop(
-    model3, tools: [], systemPrompt: "You are Astra.",
+    model3, toolDefinitions: [], systemPrompt: "You are Astra.",
     attachmentProviders: [new PeriodicReminderProvider("[fast] ok", everyNTurns: 1), new HangingProvider()],
     attachmentDeadline: TimeSpan.FromMilliseconds(200));
 

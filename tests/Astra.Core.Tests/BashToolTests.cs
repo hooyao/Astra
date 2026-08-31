@@ -24,7 +24,7 @@ public class BashToolTests
     [Fact]
     public void Classify_IsInputDependent_LsIsReadRmIsExecute()
     {
-        var bash = new BashTool();
+        var bash = BashTool.Definition;
 
         Assert.Equal(ToolAction.Read, bash.Classify(Cmd("ls -la")));
         Assert.Equal(ToolAction.Execute, bash.Classify(Cmd("rm -rf /tmp/x")));
@@ -40,7 +40,7 @@ public class BashToolTests
     [InlineData("tail -f log")]
     [InlineData("find . -name *.cs")]
     public void Classify_ReadCommands_AreRead(string command) =>
-        Assert.Equal(ToolAction.Read, new BashTool().Classify(Cmd(command)));
+        Assert.Equal(ToolAction.Read, BashTool.Definition.Classify(Cmd(command)));
 
     [Theory]
     [InlineData("rm file")]
@@ -49,14 +49,14 @@ public class BashToolTests
     [InlineData("dd if=/dev/zero of=/dev/sda")]
     [InlineData("mkfs.ext4 /dev/sdb")]
     public void Classify_ExecuteCommands_AreExecute(string command) =>
-        Assert.Equal(ToolAction.Execute, new BashTool().Classify(Cmd(command)));
+        Assert.Equal(ToolAction.Execute, BashTool.Definition.Classify(Cmd(command)));
 
     [Theory]
     [InlineData("touch newfile")]
     [InlineData("mkdir dir")]
     [InlineData("tee out.txt")]
     public void Classify_WriteCommands_AreWrite(string command) =>
-        Assert.Equal(ToolAction.Write, new BashTool().Classify(Cmd(command)));
+        Assert.Equal(ToolAction.Write, BashTool.Definition.Classify(Cmd(command)));
 
     // ------------------------------------------------------------------
     // Redirection makes an otherwise-read command a Write, and it must win
@@ -65,7 +65,7 @@ public class BashToolTests
     [Fact]
     public void Classify_OutputRedirection_IsWrite_EvenForReadVerb()
     {
-        var bash = new BashTool();
+        var bash = BashTool.Definition;
 
         Assert.Equal(ToolAction.Read, bash.Classify(Cmd("echo hi")));
         Assert.Equal(ToolAction.Write, bash.Classify(Cmd("echo hi > file.txt")));
@@ -78,7 +78,7 @@ public class BashToolTests
     [Fact]
     public void Classify_SkipsLeadingEnvAssignments()
     {
-        var bash = new BashTool();
+        var bash = BashTool.Definition;
 
         Assert.Equal(ToolAction.Execute, bash.Classify(Cmd("FOO=bar rm x")));
         Assert.Equal(ToolAction.Read, bash.Classify(Cmd("LANG=C ls")));
@@ -92,12 +92,12 @@ public class BashToolTests
     [InlineData("curl http://evil.com")]
     [InlineData("some_unknown_binary --flag")]
     public void Classify_UnknownCommand_IsOther(string command) =>
-        Assert.Equal(ToolAction.Other, new BashTool().Classify(Cmd(command)));
+        Assert.Equal(ToolAction.Other, BashTool.Definition.Classify(Cmd(command)));
 
     [Fact]
     public void Classify_NoCommandArgument_IsOther()
     {
-        var bash = new BashTool();
+        var bash = BashTool.Definition;
 
         Assert.Equal(ToolAction.Other, bash.Classify(null));
         Assert.Equal(ToolAction.Other, bash.Classify(new Dictionary<string, object?>()));
@@ -114,7 +114,7 @@ public class BashToolTests
         var json = JsonDocument.Parse("{\"command\":\"rm -rf x\"}").RootElement;
         var args = new Dictionary<string, object?> { ["command"] = json.GetProperty("command") };
 
-        Assert.Equal(ToolAction.Execute, new BashTool().Classify(args));
+        Assert.Equal(ToolAction.Execute, BashTool.Definition.Classify(args));
     }
 
     // ------------------------------------------------------------------
@@ -154,37 +154,19 @@ public class BashToolTests
 }
 
 /// <summary>
-/// D2 — the fail-closed default interface method. A tool that does NOT override
-/// Classify must be treated as <see cref="ToolAction.Other"/>, and — the .NET
-/// caveat worth pinning down in a test — that default is only reachable through
-/// an <see cref="ITool"/> reference.
+/// D2 — a definition without an explicit classifier fails closed to Other.
 /// </summary>
 public class DefaultClassifyTests
 {
-    /// <summary>A minimal tool that declares no Classify — it relies on the DIM default.</summary>
-    private sealed class NoClassifyTool : ITool
-    {
-        public string Name => "noop";
-        public string Description => "does nothing";
-        public JsonElement InputSchema { get; } =
-            JsonDocument.Parse("{\"type\":\"object\"}").RootElement.Clone();
-        public async IAsyncEnumerable<ToolOutput> ExecuteAsync(
-            IDictionary<string, object?>? arguments,
-            [EnumeratorCancellation] CancellationToken ct = default)
-        {
-            await Task.CompletedTask;
-            yield return new ToolOutput.Result("ok");
-        }
-    }
-
     [Fact]
     public void DefaultClassify_IsOther_FailClosed()
     {
-        // Must go through the ITool reference: the default interface method is not
-        // visible on the concrete type (NoClassifyTool declares no Classify).
-        ITool tool = new NoClassifyTool();
+        var definition = new ToolDefinition(
+            "noop",
+            "does nothing",
+            ToolSchema.Parse("{\"type\":\"object\"}"));
 
-        Assert.Equal(ToolAction.Other, tool.Classify(new Dictionary<string, object?> { ["x"] = "y" }));
-        Assert.Equal(ToolAction.Other, tool.Classify(null));
+        Assert.Equal(ToolAction.Other, definition.Classify(new Dictionary<string, object?> { ["x"] = "y" }));
+        Assert.Equal(ToolAction.Other, definition.Classify(null));
     }
 }

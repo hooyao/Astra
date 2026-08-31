@@ -5,19 +5,15 @@ using System.Text.Json;
 namespace Astra.Core.Files;
 
 /// <summary>Read a bounded range of a UTF-8 text file inside the workspace.</summary>
-public sealed class ReadFileTool(WorkspaceFileSystem fileSystem) : ITool
+public sealed class ReadFileTool(WorkspaceFileSystem fileSystem) : IToolExecutor
 {
+    public const string ToolName = "Read";
+
     private const int DefaultLineLimit = 2_000;
     private const int MaximumLineLimit = 10_000;
     private const int MaximumCharacters = 500_000;
 
-    public string Name => "Read";
-
-    public string Description =>
-        $"Read a UTF-8 text file ({fileSystem.AccessDescription}). " +
-        "Use offset and limit for large files. Returned content preserves the file's original line terminators.";
-
-    public JsonElement InputSchema { get; } = JsonDocument.Parse(
+    private static readonly JsonElement Schema = ToolSchema.Parse(
         """
         {
           "type": "object",
@@ -29,9 +25,18 @@ public sealed class ReadFileTool(WorkspaceFileSystem fileSystem) : ITool
           "required": ["file_path"],
           "additionalProperties": false
         }
-        """).RootElement.Clone();
+        """);
 
-    public ToolAction Classify(IDictionary<string, object?>? arguments) => ToolAction.Read;
+    public static ToolDefinition CreateDefinition(WorkspaceFileSystem fileSystem)
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+        return new ToolDefinition(
+            ToolName,
+            $"Read a UTF-8 text file ({fileSystem.AccessDescription}). " +
+            "Use offset and limit for large files. Returned content preserves the file's original line terminators.",
+            Schema,
+            static _ => ToolAction.Read);
+    }
 
     public async IAsyncEnumerable<ToolOutput> ExecuteAsync(
         IDictionary<string, object?>? arguments,

@@ -1,7 +1,7 @@
-using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
 using Astra.Core.Compaction;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace Astra.Core.Tests;
@@ -48,6 +48,31 @@ public class ContextCompactorTests
 
         public object? GetService(Type serviceType, object? serviceKey = null) => null;
         public void Dispose() { }
+    }
+
+    private sealed class ThrowingTokenEstimator : IChatTokenEstimator
+    {
+        public int EstimateTokens(IReadOnlyList<ChatMessage> messages) =>
+            throw new InvalidOperationException("must not estimate");
+    }
+
+    [Fact]
+    public async Task DisabledConfiguration_ReturnsNotNeededWithoutEstimatingOrCallingModel()
+    {
+        var summaryClient = new StubSummaryClient(failure: new InvalidOperationException("must not run"));
+        var compactor = new ContextCompactor(
+            summaryClient,
+            new ThrowingTokenEstimator(),
+            Options.Create(new CompactionOptions { Enabled = false }),
+            TimeProvider.System);
+
+        var result = await compactor.CompactIfNeededAsync(
+            [new ChatMessage(ChatRole.User, new string('x', 10_000))],
+            CompactionTrigger.Automatic,
+            CancellationToken.None);
+
+        Assert.IsType<CompactionResult.NotNeeded>(result);
+        Assert.Equal(0, summaryClient.CallCount);
     }
 
     [Fact]
@@ -151,7 +176,7 @@ public class ContextCompactorTests
         var compactor = new ContextCompactor(
             new StubSummaryClient(failure: new InvalidOperationException("must not run")),
             new RoughChatTokenEstimator(),
-            new CompactionOptions
+            Options.Create(new CompactionOptions
             {
                 ContextWindowTokens = 100_000,
                 MaxOutputTokens = 100,
@@ -159,8 +184,8 @@ public class ContextCompactorTests
                 SummaryMaxOutputTokens = 100,
                 KeepRecentToolResults = 1,
                 MinimumMicrocompactSavingsTokens = 100,
-                CompactableToolNames = ImmutableHashSet.Create(StringComparer.Ordinal, "read"),
-            },
+                CompactableToolNames = ["read"],
+            }),
             new FixedTimeProvider(now));
 
         var result = await compactor.CompactIfNeededAsync(
@@ -280,7 +305,7 @@ public class ContextCompactorTests
         new(
             summaryClient,
             new RoughChatTokenEstimator(),
-            new CompactionOptions
+            Options.Create(new CompactionOptions
             {
                 ContextWindowTokens = contextWindow,
                 MaxOutputTokens = 100,
@@ -289,9 +314,10 @@ public class ContextCompactorTests
                 KeepRecentToolResults = keepRecentToolResults,
                 MinimumMicrocompactSavingsTokens = minimumMicrocompactSavingsTokens,
                 PreserveRecentUserTurns = 1,
-                CompactableToolNames = ImmutableHashSet.Create(StringComparer.Ordinal, "read"),
+                CompactableToolNames = ["read"],
                 AutoCompactThresholdOverrideTokens = thresholdOverride,
-            });
+            }),
+            TimeProvider.System);
 
     private static ChatMessage[] ThreeToolResults(int payloadCharacters) =>
     [
