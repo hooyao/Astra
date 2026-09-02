@@ -18,6 +18,16 @@ public abstract record AgentEvent
     /// <summary>Incremental output from a running tool, for live display to the human.</summary>
     public sealed record ToolProgress(string ToolName, string CallId, string Text) : AgentEvent;
 
+    /// <summary>
+    /// A tool failed, and the failure was also returned to the model as a tool
+    /// result so the current agent turn can choose a recovery action.
+    /// </summary>
+    public sealed record ToolFailure(
+        string ToolName,
+        string CallId,
+        string Message,
+        Exception? Exception = null) : AgentEvent;
+
     /// <summary>A tool produced its final result (the block fed back to the LLM).</summary>
     public sealed record ToolResult(string ToolName, string CallId, string Result) : AgentEvent;
 
@@ -31,6 +41,6 @@ public abstract record AgentEvent
     /// <summary>A context-compaction transaction committed before a model call.</summary>
     public sealed record CompactionCompleted(CompactionReport Report) : AgentEvent;
 
-    /// <summary>An error occurred during LLM call or tool execution.</summary>
+    /// <summary>A terminal agent error occurred and the current turn cannot continue.</summary>
     public sealed record Error(string Message, Exception? Exception = null) : AgentEvent;
 }

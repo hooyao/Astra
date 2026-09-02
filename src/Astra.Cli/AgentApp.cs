@@ -87,6 +87,11 @@ public sealed class AgentApp(
                     Console.WriteLine($"  | {text}");
                     Console.ResetColor();
                     break;
+                case AgentEvent.ToolFailure { Message: var message }:
+                    Console.ForegroundColor = ConsoleColor.DarkYellow;
+                    Console.WriteLine($"  [tool failure: {message}]");
+                    Console.ResetColor();
+                    break;
                 case AgentEvent.ToolResult { Result: var result }:
                     var preview = result.Length > 200 ? result[..200] + "..." : result;
                     Console.ForegroundColor = ConsoleColor.DarkGray;
