@@ -1,6 +1,6 @@
 ﻿# Project Progress
 
-Last updated: 2026-09-02
+Last updated: 2026-09-03
 Branch: main
 
 ## Current Work
@@ -15,7 +15,9 @@ Branch: main
   TextDelta`. The exact parent-root command then completed against
   `gpt-5.6-sol`: single agent 26,386 tokens/22.3s versus multi-agent 152,934
   tokens/65.1s (5.80x tokens), with two workers complete and no isolation-marker
-  leak. The learner still needs to rerun the payoff after the fix.
+  leak. The learner reran the corrected payoff on 2026-09-03: single agent
+  33,130 tokens/27.8s versus multi-agent 88,778 tokens/41.0s = 2.68x tokens
+  and 1.47x slower, with two reports and no isolation-marker leak.
   Verification: 113/113 tests, formatter clean, and zero-warning
   `MultiAgentDemo` Release build.
 - Product scope is now explicit: Astra is a Manus-style general autonomous
@@ -25,8 +27,8 @@ Branch: main
   multi-tenant SaaS control planes are integration concerns rather than
   `Astra.Core` features. New subsystems must pass the documented failure,
   benchmark, ownership, minimal-contract, and compatibility admission gates.
-- D8 multi-agent coordination is implemented and assistant-verified; the
-  learner-run payoff remains pending. `AgentTool` starts read-only workers with
+- D8 multi-agent coordination is complete, including the learner-run payoff.
+  `AgentTool` starts read-only workers with
   clean `AgentLoop` instances, and the CLI batches their terminal reports into
   one escaped user-role notification before synthesis.
 - Replaced the implicitly reentrant shared `IWorkerRunner` with explicit
@@ -75,12 +77,18 @@ Branch: main
   batching, XML injection escaping, bounded failures, per-worker scope identity
   and disposal, admission-time scope creation, and end-to-end `Agent -> two
   workers -> one synthesis batch` behavior.
-- Verification after D8: 112/112 tests, formatter clean, zero-warning Release
-  build, and Native AOT publish successful.
+- Verification after the recovery fix: 113/113 tests, formatter clean,
+  zero-warning Release build, and Native AOT publish successful.
 - Real `gpt-5.6-sol` payoff: the single agent used 130,251 tokens and 29.7s;
   coordinator plus two workers used 126,416 tokens and 66.3s. The measured token
   multiple was 0.97x and wall time was 2.24x slower. The narrow task did not
   justify multi-agent overhead; the coordinator-only sentinel did not leak.
+- Learner payoff: single agent 33,130 tokens/27.8s; coordinator plus workers
+  88,778 tokens/41.0s = 2.68x tokens and 1.47x slower. Worker duration max was
+  28.5s versus a 53.3s sum (1.87x worker-phase speedup), proving overlap while
+  also proving that duplicated investigation and dispatch/synthesis overhead
+  outweighed it for this narrow task. Two reports completed and the isolation
+  marker remained absent.
 - Write-capable workers are not exposed in the CLI. The writer lane is present,
   but the learner chose strict stale-version conflicts and atomic same-response
   MultiEdit normalization; those file transaction mechanics must land before
@@ -143,9 +151,8 @@ Branch: main
 - Verification: 70/70 tests, formatting clean, solution build clean, Native AOT
   publish clean. `samples/CompactionDemo` verifies both deterministic and real
   provider paths.
-- Next curriculum step: the learner runs `samples/MultiAgentDemo --real`, reads
-  the token/wall-time comparison, and confirms the payoff before D8 is marked
-  complete.
+- Next curriculum step: write the Phase D-I recap, then begin D9 strict file
+  versions and atomic same-response MultiEdit.
 - `CLAUDE.md`, `AGENTS.md`, and `.codex/` were audited together: `CLAUDE.md` is
   canonical, `AGENTS.md` is a minimal Codex bootstrap, and the Codex hook reuses
   the existing Claude Code progress hook.
@@ -163,8 +170,7 @@ Branch: main
 ## Current Product State
 
 The independent product boundary and feature-admission rules are merged on
-`main`. D8 remains implemented and verified; its learner-run payoff is still
-pending before the curriculum day is marked complete.
+`main`. D8 is complete; D9 strict file versions and atomic MultiEdit is next.
 
 ## Source Files
 
