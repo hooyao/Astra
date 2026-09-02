@@ -1,7 +1,7 @@
 ﻿# Project Progress
 
 Last updated: 2026-09-02
-Branch: codex/product-scope
+Branch: main
 
 ## Current Work
 
@@ -139,6 +139,7 @@ Branch: codex/product-scope
 
 ## Recent Commits
 
+- `bfc7f01 docs: define autonomous-agent product scope` (merged PR #11)
 - `76676b2 feat: add scoped multi-agent coordination` (merged PR #10)
 - `cffdf7a feat: add coding file and PowerShell tools` (merged PR #9)
 - `814a465 D7: add context compaction pipeline` (PR #8 head before this progress update)
@@ -146,10 +147,11 @@ Branch: codex/product-scope
 - `e3b52a6 D5: permission pipeline — pluggable policy + confirmation, fail-closed` (merged PR #6)
 - `11b6aed fix(BashTool): complete output channel on stream EOF, not Process.Exited` (merged PR #5)
 
-## Current Branch Work
+## Current Product State
 
-The `codex/product-scope` branch documents the independent product boundary and
-feature-admission rules. It contains documentation changes only.
+The independent product boundary and feature-admission rules are merged on
+`main`. D8 remains implemented and verified; its learner-run payoff is still
+pending before the curriculum day is marked complete.
 
 ## Source Files
 
