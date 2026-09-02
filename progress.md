@@ -1,10 +1,17 @@
 ﻿# Project Progress
 
-Last updated: 2026-08-31
-Branch: codex/d08-multi-agent
+Last updated: 2026-09-02
+Branch: codex/product-scope
 
 ## Current Work
 
+- Product scope is now explicit: Astra is a Manus-style general autonomous
+  agent core, with the coding agent as its first specialization and the
+  measured comparison target against Claude Code and Codex. Generic workflow
+  engines, model training, application RAG pipelines, intent taxonomies, and
+  multi-tenant SaaS control planes are integration concerns rather than
+  `Astra.Core` features. New subsystems must pass the documented failure,
+  benchmark, ownership, minimal-contract, and compatibility admission gates.
 - D8 multi-agent coordination is implemented and assistant-verified; the
   learner-run payoff remains pending. `AgentTool` starts read-only workers with
   clean `AgentLoop` instances, and the CLI batches their terminal reports into
@@ -132,18 +139,17 @@ Branch: codex/d08-multi-agent
 
 ## Recent Commits
 
+- `76676b2 feat: add scoped multi-agent coordination` (merged PR #10)
 - `cffdf7a feat: add coding file and PowerShell tools` (merged PR #9)
 - `814a465 D7: add context compaction pipeline` (PR #8 head before this progress update)
 - `b50dd6b D6: context assembly — three-layer prefix (a/b/c)` (merged PR #7)
 - `e3b52a6 D5: permission pipeline — pluggable policy + confirmation, fail-closed` (merged PR #6)
 - `11b6aed fix(BashTool): complete output channel on stream EOF, not Process.Exited` (merged PR #5)
 
-## Pending Merge
+## Current Branch Work
 
-The `codex/d08-multi-agent` branch contains the D8 coordination core, CLI
-`Agent` integration, invocation-time tool activation, strongly typed options
-and dependency-injection wiring, tests, `MultiAgentDemo`, and the accompanying
-documentation. It is ready to merge after review.
+The `codex/product-scope` branch documents the independent product boundary and
+feature-admission rules. It contains documentation changes only.
 
 ## Source Files
 

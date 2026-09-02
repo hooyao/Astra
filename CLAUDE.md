@@ -4,11 +4,90 @@ This file provides canonical guidance to Claude Code (claude.ai/code) and Codex 
 
 ## Project Overview
 
-A state-of-the-art general-purpose agent framework in C#, inspired by the Claude Code architecture. The primary goal is a **general-purpose agent** that can be specialized into domain-specific agents (coding, research, automation). The coding agent is the first specialization but the framework must remain domain-agnostic.
+A high-performance autonomous-agent runtime in C#. The product north star is a
+**Manus-style general agent core**: a model repeatedly chooses actions, executes
+them in an environment, observes the results, externalizes durable state, and
+continues until the task is complete. Coding is the first specialization and
+the first hard benchmark. Astra aims to surpass Claude Code and Codex on
+measured coding-agent outcomes without turning the core into a collection of
+unrelated AI application features.
+
+The core stays domain-neutral where that improves reuse, correctness, or
+performance. Concrete product requirements come from real autonomous tasks and
+the coding specialization, not from framework feature lists or interview-topic
+checklists.
 
 Reference materials (git submodules under `refs/`):
 - **Architecture analysis**: `refs/claude-reviews-claude/` — 17-chapter deep dive into Claude Code internals
 - **Source reference**: `refs/claude-code-sourcemap/restored-src/src/` — original TypeScript source of Claude Code (v2.1.88)
+- **General-agent boundary**: Manus, ["Context Engineering for AI Agents: Lessons from Building Manus"](https://manus.im/blog/Context-Engineering-for-AI-Agents-Lessons-from-Building-Manus) — action/observation loop, stable action space, sandbox environment, file-backed context, long-horizon focus, and error recovery
+
+## Product Scope and Feature Admission
+
+### North-star capabilities
+
+Astra's product scope is the reusable runtime required by a long-running
+autonomous agent and by its coding specialization:
+
+- iterative model/action/observation execution and a typed event protocol;
+- stable, policy-controlled capability and tool lifecycles;
+- cache-aware context assembly, compaction, and recoverable external state;
+- durable task/session state, resumability, and artifact ownership;
+- execution-environment and sandbox abstractions;
+- permissions, trust provenance, and side-effect boundaries;
+- cancellation, failure recovery, retry safety, and idempotency semantics;
+- isolated worker coordination where parallelism improves measured outcomes;
+- telemetry and evaluation seams needed to measure the runtime;
+- MCP, skills, hooks, and provider adapters as capability integrations.
+
+Coding-specific tools and policies may live above the domain-neutral runtime.
+The coding agent is not a demo: it is the first product specialization and the
+benchmark used to compare Astra with Claude Code and Codex.
+
+### What "surpass" means
+
+Astra does not compete on raw feature count. A change advances the product only
+when it improves one or more measured dimensions:
+
+- task success and correctness;
+- long-horizon coherence and recovery from failed actions;
+- latency, token use, cache hit rate, and resource cost;
+- safe handling of side effects and untrusted observations;
+- debuggability and operator-visible state;
+- extensibility without weakening the core contracts.
+
+### Feature-admission gate
+
+Before adding a production abstraction or subsystem, answer all of these:
+
+1. Which autonomous-agent or coding-agent failure does it solve?
+2. What runnable task, regression test, or benchmark proves the failure and the improvement?
+3. Why does the behavior belong in Astra rather than in an application, tool, sample, provider adapter, or existing infrastructure package?
+4. What is the smallest contract that solves the demonstrated problem without committing the core to one domain?
+5. Does it preserve cancellation, Native AOT, deterministic serialization, security boundaries, and existing performance characteristics?
+
+An interview topic, another framework's feature, or a speculative future use
+case is not sufficient evidence. Start with an integration or sample when the
+ownership boundary is uncertain; promote it only after the runtime requirement
+is demonstrated.
+
+### Explicit non-goals
+
+The following do not belong in `Astra.Core` merely because they appear in AI
+job descriptions or adjacent frameworks:
+
+- model training, fine-tuning, and training-data pipelines;
+- a generic DAG/business-workflow or durable-orchestration engine;
+- vector databases, embedding pipelines, document ingestion, or a general RAG stack;
+- application-specific intent taxonomies and business routers;
+- a multi-tenant SaaS control plane, billing system, or application compliance layer;
+- feature-parity work whose only justification is matching LangGraph, Semantic Kernel, CrewAI, or another framework.
+
+Astra must compose with these systems. It may expose tools, adapters, samples,
+or narrow optional packages for proven integrations, but it does not reimplement
+their product domains. In particular, an external workflow engine may invoke an
+Astra agent as a step; that does not make workflow execution part of the agent
+core.
 
 ## Language Policy
 
@@ -55,26 +134,26 @@ dotnet publish src/Astra.Cli -c Release -r win-x64
 4. **Loop Until Done** — Not request-response; an iterative `while(true)` tool execution loop
 5. **Extensibility via Protocols** — Plugins, Skills, MCP, and hooks enable capability growth without core changes
 
-### Solution Structure
+### Current Solution Structure
 
 ```
-Astra.sln
+Astra.slnx
 ├── src/
-│   ├── Astra.Core/              # Agent loop, tool system, context management
-│   ├── Astra.Tools/             # Built-in tool implementations
-│   ├── Astra.Providers/         # LLM API providers (Anthropic, OpenAI-compat, etc.)
-│   ├── Astra.Permissions/       # Permission rules, approval pipeline
-│   ├── Astra.Mcp/               # Model Context Protocol client
-│   ├── Astra.Plugins/           # Plugin discovery, loading, lifecycle
-│   ├── Astra.Cli/               # CLI entry point and terminal UI
-│   └── Astra.Sdk/               # Public SDK for embedding agents
+│   ├── Astra.Core/              # Runtime contracts and current built-in capabilities
+│   ├── Astra.Providers/         # Provider adapters and configuration
+│   └── Astra.Cli/               # Coding-agent specialization and terminal host
 ├── tests/
-│   ├── Astra.Core.Tests/
-│   ├── Astra.Tools.Tests/
-│   └── Astra.Integration.Tests/
+│   └── Astra.Core.Tests/
 └── samples/
-    └── Astra.Samples/           # Example agent configurations
+    ├── ContextAssemblyDemo/
+    ├── CompactionDemo/
+    └── MultiAgentDemo/
 ```
+
+Do not pre-create package boundaries such as Workflows, RAG, Hosting, Plugins,
+or Evals from a roadmap diagram. Add a project only when implemented behavior
+passes the feature-admission gate and the package boundary is justified by real
+dependencies and ownership.
 
 ### The Agent Loop (Core)
 
@@ -358,6 +437,7 @@ When implementing a subsystem, read `refs/architecture-index.md` for a comprehen
 ## Development Methodology
 
 - **Learn from Claude Code, don't copy it.** Claude Code's architecture analysis (`refs/`) is a reference for design decisions and patterns, not a blueprint. Avoid its accumulated tech debt and over-complexity. Design our architecture pragmatically based on actual needs.
+- **Product evidence outranks curriculum coverage.** The Product Scope and Feature Admission rules above are authoritative. Do not implement an interview topic or roadmap item until its concrete Astra failure, ownership, and measurement case is written down.
 - **Every incremental step must produce a working, runnable artifact** — not stubs or skeletons. If it compiles but doesn't do anything useful, it's not done.
 
 ## Coding Conventions
