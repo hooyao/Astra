@@ -79,6 +79,17 @@ internal sealed class FakeTimeTool : IToolExecutor
     }
 }
 
+internal sealed class ThrowingTool(Exception failure) : IToolExecutor
+{
+    public async IAsyncEnumerable<ToolOutput> ExecuteAsync(
+        IDictionary<string, object?>? arguments,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        yield return await Task.FromException<ToolOutput>(failure);
+    }
+}
+
 /// <summary>
 /// The simplest possible model: always replies with one text chunk, never a tool
 /// call. Used to prove the loop terminates after a single round-trip on end_turn.
@@ -168,5 +179,39 @@ public class AgentLoopTests
         Assert.Equal("get_current_time", use.ToolName);
         Assert.Equal(use.CallId, result.CallId);
         Assert.Equal("2026-06-15 15:00:00", result.Result);
+    }
+
+    [Fact]
+    public async Task ToolFailure_IsRecoverable_AndReturnsToModel()
+    {
+        var model = new ScriptedChatClient();
+        var failure = new InvalidOperationException("simulated tool failure");
+        var loop = new AgentLoop(
+            model,
+            [FakeTimeTool.Definition],
+            toolExecutorFactory: new DelegateToolExecutorFactory(_ => new ThrowingTool(failure)));
+
+        var events = new List<AgentEvent>();
+        await foreach (var evt in loop.SubmitAsync("what time is it?"))
+            events.Add(evt);
+
+        Assert.Equal(2, model.CallCount);
+        Assert.Collection(
+            events,
+            e => Assert.IsType<AgentEvent.ToolUse>(e),
+            e =>
+            {
+                var toolFailure = Assert.IsType<AgentEvent.ToolFailure>(e);
+                Assert.Equal(FakeTimeTool.ToolName, toolFailure.ToolName);
+                Assert.Equal("call-1", toolFailure.CallId);
+                Assert.Equal("Tool 'get_current_time' failed: simulated tool failure", toolFailure.Message);
+                Assert.Same(failure, toolFailure.Exception);
+            },
+            e =>
+            {
+                var result = Assert.IsType<AgentEvent.ToolResult>(e);
+                Assert.Equal("Error: simulated tool failure", result.Result);
+            },
+            e => Assert.IsType<AgentEvent.TextDelta>(e));
     }
 }

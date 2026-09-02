@@ -5,6 +5,19 @@ Branch: main
 
 ## Current Work
 
+- Fixed the D8 payoff harness after a learner run exposed a recoverable `Read`
+  failure being treated as terminal. `AgentLoop` already returned tool failures
+  to the model for correction, but `AgentEvent.Error` did not distinguish that
+  path from a terminal agent failure. The event protocol now exposes typed
+  `ToolFailure`; `MultiAgentDemo` logs it and keeps iterating, prints tool
+  arguments for diagnosis, and documents repository-root path semantics. A
+  deterministic regression proves `ToolUse -> ToolFailure -> ToolResult ->
+  TextDelta`. The exact parent-root command then completed against
+  `gpt-5.6-sol`: single agent 26,386 tokens/22.3s versus multi-agent 152,934
+  tokens/65.1s (5.80x tokens), with two workers complete and no isolation-marker
+  leak. The learner still needs to rerun the payoff after the fix.
+  Verification: 113/113 tests, formatter clean, and zero-warning
+  `MultiAgentDemo` Release build.
 - Product scope is now explicit: Astra is a Manus-style general autonomous
   agent core, with the coding agent as its first specialization and the
   measured comparison target against Claude Code and Codex. Generic workflow

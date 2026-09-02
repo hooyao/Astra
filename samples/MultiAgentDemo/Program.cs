@@ -177,15 +177,44 @@ static async Task<int> RunTurnAsync(AgentLoop loop, string input, string label)
     {
         switch (evt)
         {
-            case AgentEvent.ToolUse { ToolName: var toolName }:
+            case AgentEvent.ToolUse
+            {
+                ToolName: var toolName,
+                CallId: var callId,
+                Arguments: var arguments,
+            }:
                 toolCalls++;
-                Console.WriteLine($"  {label} tool: {toolName}");
+                Console.WriteLine(
+                    $"  {label} tool: {toolName} ({callId}) {FormatArguments(arguments)}");
+                break;
+            case AgentEvent.ToolFailure { Message: var message }:
+                // Tool failures are also returned to the model as FunctionResultContent,
+                // so the current turn can inspect the error and choose a corrected action.
+                Console.WriteLine($"  {label} recoverable tool error: {message}");
                 break;
             case AgentEvent.Error { Message: var message }:
                 throw new InvalidOperationException($"{label} failed: {message}");
         }
     }
     return toolCalls;
+}
+
+static string FormatArguments(IDictionary<string, object?>? arguments)
+{
+    if (arguments is null || arguments.Count == 0)
+        return "{}";
+
+    const int maximumCharacters = 400;
+    var rendered = string.Join(
+        ", ",
+        arguments.Select(pair =>
+        {
+            var value = pair.Value?.ToString() ?? "null";
+            return $"{pair.Key}={value.Replace('\r', ' ').Replace('\n', ' ')}";
+        }));
+    return rendered.Length <= maximumCharacters
+        ? $"{{{rendered}}}"
+        : $"{{{rendered[..maximumCharacters]}...}}";
 }
 
 static WorkerUsage SumUsage(IEnumerable<WorkerUsage> usages)
@@ -234,7 +263,9 @@ static void PrintUsage(string label, WorkerUsage usage, long elapsedMilliseconds
 static string ResearchQuestion() =>
     "Inspect how Astra implements (1) context compaction before model calls and (2) permission enforcement before " +
     "tool execution. For each subsystem, identify the primary implementation path and one test that proves the key " +
-    "ordering invariant. Then explain briefly how the two guards compose. Use exact file:line evidence and do not modify files.";
+    "ordering invariant. Then explain briefly how the two guards compose. File-tool relative paths resolve from the " +
+    "Astra repository root; use paths such as 'src/Astra.Core/AgentLoop.cs' and never prefix them with " +
+    "'agent/refs/Astra/'. Use exact file:line evidence and do not modify files.";
 
 static string? ReadOption(string[] arguments, string option)
 {
@@ -276,7 +307,9 @@ internal sealed class BaselineAgentLoop(
     : AgentLoop(
         chatClient,
         tools.ResearchDefinitions,
-        "You are a read-only code researcher. Inspect the repository directly and answer with concise file:line evidence.",
+        "You are a read-only code researcher. File-tool relative paths resolve from the Astra repository root. " +
+        "Discover files with Glob/Grep, use repository-relative paths without an agent/refs/Astra prefix, and answer " +
+        "with concise file:line evidence.",
         toolExecutorFactory: toolExecutorFactory);
 
 internal sealed class DemoWorkerAgentLoop(
@@ -287,7 +320,9 @@ internal sealed class DemoWorkerAgentLoop(
         chatClient,
         tools.ResearchDefinitions,
         "You are an isolated read-only code researcher. You cannot see the coordinator conversation. " +
-        "Use file tools to gather exact evidence, do not modify files, and obey the worker-report contract.",
+        "File-tool relative paths resolve from the Astra repository root. Discover files with Glob/Grep and use " +
+        "repository-relative paths without an agent/refs/Astra prefix. Gather exact evidence, do not modify files, " +
+        "and obey the worker-report contract.",
         toolExecutorFactory: toolExecutorFactory);
 
 internal sealed class DemoMainAgentLoop(

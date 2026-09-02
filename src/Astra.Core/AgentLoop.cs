@@ -358,7 +358,12 @@ public class AgentLoop(
         catch (Exception ex)
         {
             await writer.WriteAsync(
-                new AgentEvent.Error($"Tool '{call.Name}' failed: {ex.Message}", ex), CancellationToken.None);
+                new AgentEvent.ToolFailure(
+                    call.Name,
+                    call.CallId,
+                    $"Tool '{call.Name}' failed: {ex.Message}",
+                    ex),
+                CancellationToken.None);
             var errMsg = $"Error: {ex.Message}";
             results[call.CallId] = new FunctionResultContent(call.CallId, errMsg);
             await writer.WriteAsync(new AgentEvent.ToolResult(call.Name, call.CallId, errMsg), CancellationToken.None);
