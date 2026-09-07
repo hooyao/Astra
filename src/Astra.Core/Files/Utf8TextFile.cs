@@ -1,8 +1,12 @@
+using System.Security.Cryptography;
 using System.Text;
 
 namespace Astra.Core.Files;
 
-internal readonly record struct Utf8TextSnapshot(string Content, bool HasByteOrderMark);
+internal readonly record struct Utf8TextSnapshot(
+    string Content,
+    bool HasByteOrderMark,
+    FileContentVersion Version);
 
 internal readonly record struct Utf8TextLine(string Content, string Terminator)
 {
@@ -17,34 +21,55 @@ internal readonly record struct Utf8TextLine(string Content, string Terminator)
 internal static class Utf8TextFile
 {
     private static readonly UTF8Encoding StrictUtf8 = new(
-        encoderShouldEmitUTF8Identifier: false,
+        encoderShouldEmitUTF8Identifier: true,
         throwOnInvalidBytes: true);
+    private static readonly byte[] Utf8Preamble = [0xef, 0xbb, 0xbf];
 
     public static async Task<Utf8TextSnapshot> ReadAllAsync(
         string path,
         CancellationToken ct)
     {
-        var (stream, hasByteOrderMark) = OpenRead(path);
-        await using (stream)
-        using (var reader = new StreamReader(
-            stream,
-            StrictUtf8,
-            detectEncodingFromByteOrderMarks: false,
-            bufferSize: 16 * 1024,
-            leaveOpen: false))
+        await using var reader = OpenVersionedLineReader(path);
+        var content = new StringBuilder();
+        while (await reader.ReadLineAsync(ct) is { } line)
         {
-            var content = await reader.ReadToEndAsync(ct);
-            return new Utf8TextSnapshot(content, hasByteOrderMark);
+            content.Append(line.Content);
+            content.Append(line.Terminator);
         }
+
+        return new Utf8TextSnapshot(
+            content.ToString(),
+            reader.HasByteOrderMark,
+            reader.GetCompletedVersion());
     }
 
     public static Utf8TextLineReader OpenLineReader(string path)
     {
-        var (stream, _) = OpenRead(path);
+        var (stream, _) = OpenValidatedStream(path);
         return new Utf8TextLineReader(stream, StrictUtf8);
     }
 
-    private static (FileStream Stream, bool HasByteOrderMark) OpenRead(string path)
+    public static VersionedUtf8TextLineReader OpenVersionedLineReader(string path)
+    {
+        var (stream, hasByteOrderMark) = OpenValidatedStream(path);
+        var hash = SHA256.Create();
+        var hashingStream = new CryptoStream(stream, hash, CryptoStreamMode.Read);
+        return new VersionedUtf8TextLineReader(
+            new Utf8TextLineReader(hashingStream, StrictUtf8),
+            hash,
+            hasByteOrderMark);
+    }
+
+    public static FileContentVersion ComputeVersion(string content, bool emitUtf8Bom)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        if (emitUtf8Bom)
+            hash.AppendData(Utf8Preamble);
+        hash.AppendData(StrictUtf8.GetBytes(content));
+        return new FileContentVersion(Convert.ToHexString(hash.GetHashAndReset()));
+    }
+
+    private static (FileStream Stream, bool HasByteOrderMark) OpenValidatedStream(string path)
     {
         var stream = new FileStream(
             path,
@@ -65,13 +90,13 @@ internal static class Utf8TextFile
                     break;
                 length += read;
             }
+
             var hasUtf8Bom = length >= 3 &&
                 prefix[0] == 0xef && prefix[1] == 0xbb && prefix[2] == 0xbf;
-
             if (!hasUtf8Bom && IsUtf16OrUtf32Bom(prefix[..length]))
                 throw new InvalidDataException("The file is not UTF-8 text.");
 
-            stream.Position = hasUtf8Bom ? 3 : 0;
+            stream.Position = 0;
             return (stream, hasUtf8Bom);
         }
         catch
@@ -90,6 +115,43 @@ internal static class Utf8TextFile
          (prefix[0] == 0xfe && prefix[1] == 0xff));
 }
 
+internal sealed class VersionedUtf8TextLineReader(
+    Utf8TextLineReader reader,
+    SHA256 hash,
+    bool hasByteOrderMark) : IAsyncDisposable
+{
+    private FileContentVersion? _completedVersion;
+
+    public bool HasByteOrderMark { get; } = hasByteOrderMark;
+
+    public async ValueTask<Utf8TextLine?> ReadLineAsync(CancellationToken ct) =>
+        await reader.ReadLineAsync(ct);
+
+    public async ValueTask<FileContentVersion> DrainAndGetVersionAsync(CancellationToken ct)
+    {
+        while (await reader.ReadLineAsync(ct) is not null)
+        {
+        }
+
+        return GetCompletedVersion();
+    }
+
+    public FileContentVersion GetCompletedVersion()
+    {
+        if (!reader.IsCompleted)
+            throw new InvalidOperationException("The complete file must be read before its version is available.");
+
+        return _completedVersion ??= new FileContentVersion(
+            Convert.ToHexString(hash.Hash ?? throw new InvalidOperationException("The file hash was not finalized.")));
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await reader.DisposeAsync();
+        hash.Dispose();
+    }
+}
+
 internal sealed class Utf8TextLineReader : IAsyncDisposable
 {
     private readonly StreamReader _reader;
@@ -98,8 +160,12 @@ internal sealed class Utf8TextLineReader : IAsyncDisposable
     private int _length;
     private bool _completed;
 
-    public Utf8TextLineReader(FileStream stream, Encoding encoding)
+    public bool IsCompleted => _completed;
+
+    public Utf8TextLineReader(Stream stream, Encoding encoding)
     {
+        // Strip this encoding's UTF-8 preamble without switching to the default
+        // replacement decoder when a BOM is present.
         _reader = new StreamReader(
             stream,
             encoding,

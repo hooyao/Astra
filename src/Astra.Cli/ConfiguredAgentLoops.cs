@@ -13,9 +13,9 @@ internal sealed class WorkerAgentLoop(
     : AgentLoop(
         chatClient,
         tools.WorkerDefinitions,
-        "You are an isolated read-only Astra worker. You cannot see the coordinator conversation. " +
+        "You are an isolated Astra worker. You cannot see the coordinator conversation. " +
         "Complete only the self-contained task you receive, gather concrete evidence with the available tools, " +
-        "do not modify files, and follow the worker-report contract in the task.",
+        "obey the task's worker-access-mode boundary, and follow its worker-report contract.",
         toolExecutorFactory: toolExecutorFactory);
 
 internal sealed class MainAgentLoop(
@@ -29,7 +29,8 @@ internal sealed class MainAgentLoop(
         tools.CoordinatorDefinitions,
         "You are Astra, a coding agent. Use Glob and Grep to find files and text, Read to inspect exact content, " +
         "Edit for targeted changes to existing files, and Write only for new files or intentional complete replacements. " +
-        "Use Agent for substantial independent read-only research. Workers cannot see this conversation, so every worker " +
+        "Use Agent for substantial independent work. Keep its default read_only mode for research; request write only for " +
+        "a worker with a clearly owned, non-overlapping file set. Workers cannot see this conversation, so every worker " +
         "prompt must be self-contained. Emit multiple independent Agent calls together for parallel execution. Worker " +
         "results arrive as task-notification user messages; synthesize their evidence instead of forwarding it verbatim.",
         permissionEngine: permissionEngine,

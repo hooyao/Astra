@@ -147,6 +147,7 @@ Astra.slnx
 └── samples/
     ├── ContextAssemblyDemo/
     ├── CompactionDemo/
+    ├── FileFreshnessDemo/
     └── MultiAgentDemo/
 ```
 
@@ -270,6 +271,15 @@ missing parent directories and atomically creates or completely overwrites a
 UTF-8 file. `Edit` uses exact ordinal replacement, requires one match unless
 `replace_all=true`, and preserves original line terminators and a UTF-8 BOM.
 
+Each agent/worker scope owns a harness-internal content-hash observation store.
+A bounded `Read` hashes the complete exact file while returning only the selected
+range. Existing-file `Edit` and complete `Write` compare current bytes with that
+agent's observation; changed content returns a recoverable `Read again` result.
+A successful write advances only that agent's observation. A process-wide
+canonical-path gate serializes same-file Astra writers while unrelated worker
+tasks may overlap. This is a freshness guard, not filesystem ACID or CAS; IDE,
+linter, shell, and arbitrary external-process races remain outside the guarantee.
+
 The CLI resolves `Write` and `Edit` actions through `DefaultPermissionEngine` +
 `ConsoleUserConfirmation` (`[y/N]`). `Read`, `Glob`, and `Grep` run without a
 prompt. Tool-level argument validation is implemented; centralized validation
@@ -317,7 +327,7 @@ Fail-closed: unknown → deny. Each layer can short-circuit.
 1. **MicroCompact** — Clear allowlisted old tool-result payloads; preserve call
    IDs and a recent window. Local content clearing runs under token pressure or
    after a 60-minute cold-cache interval.
-2. **Session Memory** — Background-maintained summary (deferred to D9).
+2. **Session Memory** — Background-maintained summary (deferred to D13).
 3. **Full Compact** — LLM-generated summary of completed older turns while the
    current user turn remains verbatim.
 4. **Reactive Compact** — Emergency full-compaction trigger after
@@ -358,11 +368,12 @@ Workers have **complete context isolation** — they cannot see the coordinator'
 > exposes read-only workers to the CLI; multiple Agent calls in one model
 > response run concurrently through D3's read batch, then the CLI collects the
 > active group outside the main loop and submits one notification batch for
-> synthesis. `WorkerCoordinator` has a global single-writer lane, but
-> write-capable workers remain unexposed until strict file-version and atomic
-> MultiEdit transactions are implemented. `samples/MultiAgentDemo` compares a
-> single agent with two real `gpt-5.6-sol` workers and reports the measured token
-> multiple.
+> synthesis. D9 adds permission-classified `Agent(access_mode="write")`, enforces
+> read-only requests before executor activation, records trusted changed paths,
+> and replaces the global worker-writer lane with file-tool same-path gates.
+> Coordinator prompts still request non-overlapping file ownership.
+> `samples/MultiAgentDemo` compares a single agent with two real `gpt-5.6-sol`
+> workers and reports the measured token multiple.
 
 ### Hook System
 

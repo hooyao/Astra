@@ -138,6 +138,7 @@ public sealed class WorkspaceFileSystem
             await File.WriteAllTextAsync(temporaryPath, content, encoding, ct);
             if (!OperatingSystem.IsWindows() && existingUnixMode is { } unixMode)
                 File.SetUnixFileMode(temporaryPath, unixMode);
+            ct.ThrowIfCancellationRequested();
             File.Move(temporaryPath, resolvedPath, overwrite);
         }
         finally

@@ -72,6 +72,16 @@ public sealed class ConfigurationOptionsTests : IDisposable
         await using var scope = provider.CreateAsyncScope();
         var executorFactory = scope.ServiceProvider.GetRequiredService<IToolExecutorFactory>();
         Assert.IsType<PowerShellTool>(executorFactory.Create(PowerShellTool.ToolName));
+        var firstObservations = scope.ServiceProvider.GetRequiredService<FileObservationStore>();
+        var firstWriteCoordinator = scope.ServiceProvider.GetRequiredService<FileWriteCoordinator>();
+
+        await using var secondScope = provider.CreateAsyncScope();
+        Assert.NotSame(
+            firstObservations,
+            secondScope.ServiceProvider.GetRequiredService<FileObservationStore>());
+        Assert.Same(
+            firstWriteCoordinator,
+            secondScope.ServiceProvider.GetRequiredService<FileWriteCoordinator>());
 
         var contextCompactor = scope.ServiceProvider.GetRequiredService<IContextCompactor>();
         var result = await contextCompactor.CompactIfNeededAsync(

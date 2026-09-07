@@ -5,7 +5,10 @@ using System.Text.Json;
 namespace Astra.Core.Files;
 
 /// <summary>Replace exact text in an existing UTF-8 file inside the workspace.</summary>
-public sealed class EditFileTool(WorkspaceFileSystem fileSystem) : IToolExecutor
+public sealed class EditFileTool(
+    WorkspaceFileSystem fileSystem,
+    FileObservationStore observations,
+    FileWriteCoordinator writes) : IToolExecutor
 {
     public const string ToolName = "Edit";
 
@@ -30,7 +33,8 @@ public sealed class EditFileTool(WorkspaceFileSystem fileSystem) : IToolExecutor
         return new ToolDefinition(
             ToolName,
             $"Edit an existing UTF-8 text file ({fileSystem.AccessDescription}) " +
-            "by exact ordinal text replacement. By default old_string must occur exactly once.",
+            "by exact ordinal text replacement. Read the file first; Astra rejects the edit if its content changed " +
+            "since that read. By default old_string must occur exactly once.",
             Schema,
             static _ => ToolAction.Write);
     }
@@ -39,16 +43,38 @@ public sealed class EditFileTool(WorkspaceFileSystem fileSystem) : IToolExecutor
         IDictionary<string, object?>? arguments,
         [EnumeratorCancellation] CancellationToken ct)
     {
+        yield return new ToolOutput.Result(await EditAsync(arguments, ct));
+    }
+
+    private async Task<string> EditAsync(
+        IDictionary<string, object?>? arguments,
+        CancellationToken ct)
+    {
         var requestedPath = FileToolArguments.RequireString(arguments, "file_path");
         var oldText = FileToolArguments.RequireNonEmptyString(arguments, "old_string");
         var newText = FileToolArguments.RequirePresentString(arguments, "new_string");
         var replaceAll = FileToolArguments.OptionalBool(arguments, "replace_all", fallback: false);
         var path = fileSystem.ResolvePath(requestedPath);
 
+        using var writeLease = await writes.AcquireAsync(path, ct);
         if (!File.Exists(path))
-            throw new FileNotFoundException("File not found.", fileSystem.DisplayPath(path));
+        {
+            observations.Invalidate(path);
+            return "Error: File no longer exists. Read it again before attempting to edit it.";
+        }
+
+        if (!observations.TryGet(path, out var observedVersion))
+        {
+            return "Error: File has not been read by this agent. Read it before attempting to edit it.";
+        }
 
         var snapshot = await Utf8TextFile.ReadAllAsync(path, ct);
+        if (snapshot.Version != observedVersion)
+        {
+            observations.Invalidate(path);
+            return "Error: File changed since this agent last read it. Read it again before attempting to edit it.";
+        }
+
         var occurrences = CountOccurrences(snapshot.Content, oldText);
         if (occurrences == 0)
             throw new InvalidOperationException("old_string was not found; the file was not changed.");
@@ -61,6 +87,7 @@ public sealed class EditFileTool(WorkspaceFileSystem fileSystem) : IToolExecutor
         var updated = replaceAll
             ? snapshot.Content.Replace(oldText, newText, StringComparison.Ordinal)
             : ReplaceOnce(snapshot.Content, oldText, newText);
+        var newVersion = Utf8TextFile.ComputeVersion(updated, snapshot.HasByteOrderMark);
 
         await fileSystem.WriteTextAtomicallyAsync(
             path,
@@ -68,9 +95,9 @@ public sealed class EditFileTool(WorkspaceFileSystem fileSystem) : IToolExecutor
             overwrite: true,
             ct,
             emitUtf8Bom: snapshot.HasByteOrderMark);
-        yield return new ToolOutput.Result(
-            $"Edited {fileSystem.DisplayPath(path)}: replaced {(replaceAll ? occurrences : 1)} occurrence(s); " +
-            $"file is now {Encoding.UTF8.GetByteCount(updated):N0} UTF-8 bytes.");
+        observations.RecordWrite(path, newVersion);
+        return $"Edited {fileSystem.DisplayPath(path)}: replaced {(replaceAll ? occurrences : 1)} occurrence(s); " +
+            $"file is now {Encoding.UTF8.GetByteCount(updated):N0} UTF-8 bytes.";
     }
 
     private static int CountOccurrences(string content, string value)

@@ -1,10 +1,42 @@
 ﻿# Project Progress
 
-Last updated: 2026-09-03
-Branch: main
+Last updated: 2026-09-07
 
 ## Current Work
 
+- D9 review fixed two reproduced regressions: UTF-8 BOM detection no longer
+  enables replacement decoding for invalid bytes, and file writes release the
+  same-path gate before yielding their final result to a potentially paused
+  consumer. The deterministic demo now checks actual file contents and the
+  stale-write result before printing `PASS`.
+- D9 file freshness is implemented on `codex/d09-file-freshness`. Every
+  agent/worker scope owns a content-hash observation store. A bounded `Read`
+  hashes the complete exact bytes; existing-file `Edit` and complete `Write`
+  compare current content with that agent's observation and return a recoverable
+  `Read again` result after a change. Successful writes advance only the
+  executing agent's snapshot, so several ordered edits do not require redundant
+  reads while another worker's older hash remains stale.
+- Replaced D8's global worker-writer lane with a process-wide canonical-path
+  gate inside file tools. Same-file Astra writes serialize across scopes;
+  unrelated write workers may overlap. This deliberately provides freshness
+  detection, not filesystem ACID or CAS: IDE, linter, shell, and arbitrary
+  external-process races remain outside the guarantee.
+- `Agent(access_mode="write")` is now permission-classified as Write; read-only
+  remains the default. Worker turn options reject write-class calls before
+  executor activation, while approved write workers receive `Read`, `Edit`, and
+  `Write`. The trusted completion envelope reports canonical changed paths from
+  scoped harness state rather than trusting the model-authored report.
+- `samples/FileFreshnessDemo` is the deterministic learner payoff. The
+  assistant run showed `H0 -> A writes H1 -> B receives Read again -> B reads H1
+  and recovers`, then two ordered same-agent edits succeeding without another
+  read. Verification: formatter clean, 136/136 tests, zero-warning Release
+  build, and Native AOT publish successful. The learner still needs to run the
+  demo before D9 is complete.
+- Real local `gpt-5.6-sol` integration requested one
+  `Agent(access_mode="write")`. The coordinator displayed the outer Write
+  permission, the approved worker created its exclusively assigned file, and
+  completion synthesis reported success. Byte-level verification found exactly
+  15 UTF-8 bytes, `WORKER_WRITE_OK`, with no BOM or newline.
 - Fixed the D8 payoff harness after a learner run exposed a recoverable `Read`
   failure being treated as terminal. `AgentLoop` already returned tool failures
   to the model for correction, but `AgentEvent.Error` did not distinguish that
@@ -28,9 +60,8 @@ Branch: main
   `Astra.Core` features. New subsystems must pass the documented failure,
   benchmark, ownership, minimal-contract, and compatibility admission gates.
 - D8 multi-agent coordination is complete, including the learner-run payoff.
-  `AgentTool` starts read-only workers with
-  clean `AgentLoop` instances, and the CLI batches their terminal reports into
-  one escaped user-role notification before synthesis.
+  `AgentTool` starts clean `AgentLoop` instances, and the CLI batches their
+  terminal reports into one escaped user-role notification before synthesis.
 - Replaced the implicitly reentrant shared `IWorkerRunner` with explicit
   dependency-injection ownership. `WorkerCoordinator` now holds only an
   `IWorkerSessionFactory`; every admitted worker gets an independent async scope
@@ -69,9 +100,9 @@ Branch: main
   session-scope creation, and app startup.
 - Added typed `WorkerReport` / `WorkerCompletion` contracts, source-generated
   JSON parsing, provider usage aggregation, bounded parallelism, targeted
-  cancellation, exactly-once completion fan-in, and a global single-writer
-  lane. Invalid reports and exception text are bounded without leaking private
-  worker transcripts.
+  cancellation, and exactly-once completion fan-in. D9 removed the temporary
+  global writer lane in favor of same-path file gates. Invalid reports and
+  exception text are bounded without leaking private worker transcripts.
 - Twelve focused tests cover context isolation, trusted usage, invalid reports,
   actual read overlap, serialized writers, targeted cancellation, completion
   batching, XML injection escaping, bounded failures, per-worker scope identity
@@ -89,10 +120,10 @@ Branch: main
   also proving that duplicated investigation and dispatch/synthesis overhead
   outweighed it for this narrow task. Two reports completed and the isolation
   marker remained absent.
-- Write-capable workers are not exposed in the CLI. The writer lane is present,
-  but the learner chose strict stale-version conflicts and atomic same-response
-  MultiEdit normalization; those file transaction mechanics must land before
-  enabling worker writes.
+- Write-capable workers are exposed explicitly through
+  `Agent(access_mode="write")`; the outer Agent call requires Write permission.
+  Read-only enforcement, per-agent observations, same-path ordering, and trusted
+  changed-path reporting remain harness-owned.
 - Post-D7 usability follow-up is implemented on branch `codex/file-tools` and
   merged via PR #9. The portable file-tool contract follows Claude
   Code's familiar `Read` / `Write` / `Edit` / `Glob` / `Grep` names and core
@@ -151,8 +182,8 @@ Branch: main
 - Verification: 70/70 tests, formatting clean, solution build clean, Native AOT
   publish clean. `samples/CompactionDemo` verifies both deterministic and real
   provider paths.
-- Next curriculum step: write the Phase D-I recap, then begin D9 strict file
-  versions and atomic same-response MultiEdit.
+- Next curriculum step: the learner runs `samples/FileFreshnessDemo`; after the
+  payoff is confirmed, mark D9 complete and begin D10 durable session resume.
 - `CLAUDE.md`, `AGENTS.md`, and `.codex/` were audited together: `CLAUDE.md` is
   canonical, `AGENTS.md` is a minimal Codex bootstrap, and the Codex hook reuses
   the existing Claude Code progress hook.
@@ -170,7 +201,8 @@ Branch: main
 ## Current Product State
 
 The independent product boundary and feature-admission rules are merged on
-`main`. D8 is complete; D9 strict file versions and atomic MultiEdit is next.
+`main`. D8 is complete. D9 file freshness and same-path write serialization are
+implemented and assistant-verified; the learner payoff is pending.
 
 ## Source Files
 
@@ -188,6 +220,7 @@ src/Astra.Providers/ChatClientFactory.cs
 src/Astra.Cli/AgentApp.cs
 src/Astra.Cli/Program.cs
 samples/CompactionDemo/*
+samples/FileFreshnessDemo/*
 samples/MultiAgentDemo/*
 tests/Astra.Core.Tests/*
 ```

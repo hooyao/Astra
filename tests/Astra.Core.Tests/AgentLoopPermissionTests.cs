@@ -175,6 +175,31 @@ public class AgentLoopPermissionTests
     }
 
     [Fact]
+    public async Task ReadOnlyTurn_DeniesWriteBeforeExecutorActivation()
+    {
+        var definition = Definition("Edit", ToolAction.Write);
+        var executors = new CountingExecutorFactory(() => new SpyTool("Edit"));
+        var loop = new AgentLoop(
+            new OneToolClient(Cmd("Edit", "change")),
+            [definition],
+            toolExecutorFactory: executors);
+
+        var events = new List<AgentEvent>();
+        await foreach (var evt in loop.SubmitAsync(
+                           "inspect only",
+                           new AgentTurnOptions { ReadOnlyTools = true }))
+        {
+            events.Add(evt);
+        }
+
+        Assert.Equal(0, executors.Activations);
+        Assert.Contains(events, evt => evt is AgentEvent.ToolDenied);
+        Assert.Contains(
+            "read-only worker",
+            Assert.Single(events.OfType<AgentEvent.ToolResult>()).Result);
+    }
+
+    [Fact]
     public async Task Executor_IsActivatedOnlyWhenCalled_AndOncePerInvocation()
     {
         var definition = Definition("bash", ToolAction.Read);

@@ -33,7 +33,7 @@ public sealed class ConsoleUserConfirmation : IUserConfirmation
         if (arguments is null)
             return false;
 
-        foreach (var name in new[] { "path", "command" })
+        foreach (var name in new[] { "path", "file_path", "command", "description" })
         {
             if (!arguments.TryGetValue(name, out var raw) || raw is null)
                 continue;

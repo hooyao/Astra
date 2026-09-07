@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Xml.Linq;
 using Astra.Core.Compaction;
 using Astra.Core.Coordination;
+using Astra.Core.Files;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -12,6 +13,53 @@ namespace Astra.Core.Tests;
 
 public sealed class CoordinationTests
 {
+    [Fact]
+    public void AgentTool_AccessModeControlsPermissionClassification()
+    {
+        Assert.Equal(
+            ToolAction.Read,
+            AgentTool.Definition.Classify(new Dictionary<string, object?>()));
+        Assert.Equal(
+            ToolAction.Write,
+            AgentTool.Definition.Classify(new Dictionary<string, object?>
+            {
+                ["access_mode"] = "write",
+            }));
+        Assert.Equal(
+            ToolAction.Other,
+            AgentTool.Definition.Classify(new Dictionary<string, object?>
+            {
+                ["access_mode"] = "invalid",
+            }));
+    }
+
+    [Fact]
+    public async Task AgentTool_WriteModeReachesWorkerRequest()
+    {
+        WorkerAccessMode? observedMode = null;
+        await using var coordinator = new WorkerCoordinator(
+            new DelegateWorkerSessionFactory((taskId, workerId, request, _) =>
+            {
+                observedMode = request.AccessMode;
+                return Task.FromResult(Completed(taskId, workerId, request));
+            }));
+        var tool = new AgentTool(coordinator);
+
+        await foreach (var _ in tool.ExecuteAsync(
+                           new Dictionary<string, object?>
+                           {
+                               ["description"] = "edit one file",
+                               ["prompt"] = "Update owned.txt only.",
+                               ["access_mode"] = "write",
+                           },
+                           CancellationToken.None))
+        {
+        }
+
+        await coordinator.ReadUntilIdleAsync();
+        Assert.Equal(WorkerAccessMode.Write, observedMode);
+    }
+
     [Fact]
     public async Task AgentLoopWorker_UsesDistinctScopes_ParsesReport_AndMeasuresUsage()
     {
@@ -105,7 +153,7 @@ public sealed class CoordinationTests
     public async Task Coordinator_ReadWorkersActuallyOverlap()
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        var probe = new ParallelReadProbe(expectedWorkers: 2);
+        var probe = new ParallelWorkerProbe(expectedWorkers: 2);
         await using var coordinator = new WorkerCoordinator(
             new DelegateWorkerSessionFactory(probe.RunAsync),
             maxConcurrentWorkers: 2);
@@ -203,10 +251,10 @@ public sealed class CoordinationTests
     }
 
     [Fact]
-    public async Task Coordinator_WriteWorkersUseOneGlobalLane()
+    public async Task Coordinator_DoesNotSerializeUnrelatedWriteWorkersGlobally()
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        var probe = new WriterProbe();
+        var probe = new ParallelWorkerProbe(expectedWorkers: 2);
         await using var coordinator = new WorkerCoordinator(
             new DelegateWorkerSessionFactory(probe.RunAsync),
             maxConcurrentWorkers: 2);
@@ -218,15 +266,9 @@ public sealed class CoordinationTests
             new WorkerRequest("second writer", "two", WorkerAccessMode.Write),
             timeout.Token));
 
-        await probe.FirstEntered.WaitAsync(timeout.Token);
-        Assert.Equal(1, probe.EnteredCount);
-        Assert.False(probe.SecondEntered.IsCompleted);
-
-        probe.ReleaseFirst();
-        await probe.SecondEntered.WaitAsync(timeout.Token);
         await Task.WhenAll(first.Completion, second.Completion);
 
-        Assert.Equal(1, probe.MaximumConcurrent);
+        Assert.Equal(2, probe.MaximumConcurrent);
     }
 
     [Fact]
@@ -329,7 +371,7 @@ public sealed class CoordinationTests
     public async Task AgentTool_FansOutTwoWorkers_ThenSynthesizesOneNotificationBatch()
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        var workerProbe = new ParallelReadProbe(expectedWorkers: 2);
+        var workerProbe = new ParallelWorkerProbe(expectedWorkers: 2);
         await using var coordinator = new WorkerCoordinator(
             new DelegateWorkerSessionFactory(workerProbe.RunAsync),
             maxConcurrentWorkers: 2);
@@ -379,6 +421,7 @@ public sealed class CoordinationTests
         services.AddSingleton(client);
         services.AddSingleton<TimeProvider>(TimeProvider.System);
         services.AddSingleton<IChatTokenEstimator, RoughChatTokenEstimator>();
+        services.AddScoped<FileObservationStore>();
         services.AddScoped(provider =>
             new UsageTrackingChatClient(provider.GetRequiredService<IChatClient>()));
         services.AddKeyedScoped<AgentLoop>(AgentServiceKeys.WorkerLoop, (provider, _) =>
@@ -528,7 +571,7 @@ public sealed class CoordinationTests
                 });
     }
 
-    private sealed class ParallelReadProbe(int expectedWorkers)
+    private sealed class ParallelWorkerProbe(int expectedWorkers)
     {
         private readonly TaskCompletionSource _allEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _active;
@@ -549,47 +592,6 @@ public sealed class CoordinationTests
                 _allEntered.TrySetResult();
 
             await _allEntered.Task.WaitAsync(ct);
-            Interlocked.Decrement(ref _active);
-            return Completed(taskId, workerId, request);
-        }
-    }
-
-    private sealed class WriterProbe
-    {
-        private readonly TaskCompletionSource _firstEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private readonly TaskCompletionSource _releaseFirst = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private readonly TaskCompletionSource _secondEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private int _active;
-        private int _entered;
-        private int _maximumConcurrent;
-
-        public Task FirstEntered => _firstEntered.Task;
-        public Task SecondEntered => _secondEntered.Task;
-        public int EnteredCount => Volatile.Read(ref _entered);
-        public int MaximumConcurrent => Volatile.Read(ref _maximumConcurrent);
-
-        public void ReleaseFirst() => _releaseFirst.TrySetResult();
-
-        public async Task<WorkerCompletion> RunAsync(
-            WorkerTaskId taskId,
-            WorkerId workerId,
-            WorkerRequest request,
-            CancellationToken ct)
-        {
-            var entry = Interlocked.Increment(ref _entered);
-            var active = Interlocked.Increment(ref _active);
-            UpdateMaximum(ref _maximumConcurrent, active);
-
-            if (entry == 1)
-            {
-                _firstEntered.TrySetResult();
-                await _releaseFirst.Task.WaitAsync(ct);
-            }
-            else
-            {
-                _secondEntered.TrySetResult();
-            }
-
             Interlocked.Decrement(ref _active);
             return Completed(taskId, workerId, request);
         }

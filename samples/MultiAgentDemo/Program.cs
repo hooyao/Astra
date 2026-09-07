@@ -46,6 +46,8 @@ services.AddOptions<WorkspaceOptions>().Configure(options => options.WorkingDire
 services.AddSingleton<TimeProvider>(TimeProvider.System);
 services.AddSingleton<IChatTokenEstimator, RoughChatTokenEstimator>();
 services.AddSingleton<WorkspaceFileSystem>();
+services.AddSingleton<FileWriteCoordinator>();
+services.AddScoped<FileObservationStore>();
 services.AddSingleton<DemoToolCatalog>();
 services.AddScoped<IChatClient, ConfiguredChatClient>();
 services.AddScoped<UsageTrackingChatClient>();

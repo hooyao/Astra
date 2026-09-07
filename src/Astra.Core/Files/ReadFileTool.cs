@@ -5,7 +5,9 @@ using System.Text.Json;
 namespace Astra.Core.Files;
 
 /// <summary>Read a bounded range of a UTF-8 text file inside the workspace.</summary>
-public sealed class ReadFileTool(WorkspaceFileSystem fileSystem) : IToolExecutor
+public sealed class ReadFileTool(
+    WorkspaceFileSystem fileSystem,
+    FileObservationStore observations) : IToolExecutor
 {
     public const string ToolName = "Read";
 
@@ -33,7 +35,8 @@ public sealed class ReadFileTool(WorkspaceFileSystem fileSystem) : IToolExecutor
         return new ToolDefinition(
             ToolName,
             $"Read a UTF-8 text file ({fileSystem.AccessDescription}). " +
-            "Use offset and limit for large files. Returned content preserves the file's original line terminators.",
+            "Use offset and limit for large files. Returned content preserves the file's original line terminators. " +
+            "Read an existing file before Edit or complete replacement Write so Astra can detect intervening changes.",
             Schema,
             static _ => ToolAction.Read);
     }
@@ -49,14 +52,18 @@ public sealed class ReadFileTool(WorkspaceFileSystem fileSystem) : IToolExecutor
         var path = fileSystem.ResolvePath(requestedPath);
 
         if (!File.Exists(path))
+        {
+            observations.Invalidate(path);
             throw new FileNotFoundException("File not found.", fileSystem.DisplayPath(path));
+        }
 
-        await using var reader = Utf8TextFile.OpenLineReader(path);
+        await using var reader = Utf8TextFile.OpenVersionedLineReader(path);
 
         for (var lineNumber = 1; lineNumber < offset; lineNumber++)
         {
             if (await reader.ReadLineAsync(ct) is null)
             {
+                observations.Record(path, reader.GetCompletedVersion());
                 yield return new ToolOutput.Result(
                     $"File: {fileSystem.DisplayPath(path)}\nRequested offset {offset} is past end of file.");
                 yield break;
@@ -95,6 +102,9 @@ public sealed class ReadFileTool(WorkspaceFileSystem fileSystem) : IToolExecutor
             : hasMoreLines
                 ? $"\n\n[More content available. Continue with offset={endLine + 1}.]"
                 : string.Empty;
+
+        var version = await reader.DrainAndGetVersionAsync(ct);
+        observations.Record(path, version);
 
         yield return new ToolOutput.Result(
             $"File: {fileSystem.DisplayPath(path)}\nLines: {offset}-{endLine}\n\n{content}{suffix}");

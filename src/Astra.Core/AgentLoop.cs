@@ -223,7 +223,7 @@ public class AgentLoop(
                     SingleWriter = false, // concurrent tools all write
                 });
                 var results = new ConcurrentDictionary<string, AIContent>();
-                var producer = RunBatchAsync(batch, channel.Writer, results, ct);
+                var producer = RunBatchAsync(batch, channel.Writer, results, turnOptions, ct);
 
                 // Drain without a ct: the producer's finally always completes the
                 // channel (even on cancellation), so the drain ends and we then
@@ -268,6 +268,7 @@ public class AgentLoop(
         ToolBatch batch,
         ChannelWriter<AgentEvent> writer,
         ConcurrentDictionary<string, AIContent> results,
+        AgentTurnOptions? turnOptions,
         CancellationToken ct)
     {
         try
@@ -279,7 +280,7 @@ public class AgentLoop(
                 await slots.WaitAsync(ct);
                 try
                 {
-                    await RunOneToolAsync(call, writer, results, ct);
+                    await RunOneToolAsync(call, writer, results, turnOptions, ct);
                 }
                 finally
                 {
@@ -306,6 +307,7 @@ public class AgentLoop(
         FunctionCallContent call,
         ChannelWriter<AgentEvent> writer,
         ConcurrentDictionary<string, AIContent> results,
+        AgentTurnOptions? turnOptions,
         CancellationToken ct)
     {
         if (!_toolMap.TryGetValue(call.Name, out var definition))
@@ -313,6 +315,16 @@ public class AgentLoop(
             var unknown = $"Error: unknown tool '{call.Name}'";
             results[call.CallId] = new FunctionResultContent(call.CallId, unknown);
             await writer.WriteAsync(new AgentEvent.ToolResult(call.Name, call.CallId, unknown), CancellationToken.None);
+            return;
+        }
+
+        var action = definition.Classify(call.Arguments);
+        if (turnOptions?.ReadOnlyTools == true && action != ToolAction.Read)
+        {
+            var reason = $"Tool '{call.Name}' is unavailable in a read-only worker.";
+            results[call.CallId] = new FunctionResultContent(call.CallId, reason);
+            await writer.WriteAsync(new AgentEvent.ToolDenied(call.Name, call.CallId, reason), CancellationToken.None);
+            await writer.WriteAsync(new AgentEvent.ToolResult(call.Name, call.CallId, reason), CancellationToken.None);
             return;
         }
 
@@ -325,7 +337,7 @@ public class AgentLoop(
         IDictionary<string, object?>? effectiveArgs = call.Arguments;
         if (permissionEngine is not null)
         {
-            var decision = await permissionEngine.CheckAsync(call, definition.Classify(call.Arguments), ct);
+            var decision = await permissionEngine.CheckAsync(call, action, ct);
             if (decision is PermissionDecision.Deny(var reason))
             {
                 results[call.CallId] = new FunctionResultContent(call.CallId, reason);

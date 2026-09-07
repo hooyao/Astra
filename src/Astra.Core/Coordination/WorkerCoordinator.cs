@@ -23,8 +23,8 @@ public abstract record WorkerStartResult
 
 /// <summary>
 /// Owns worker lifecycle, bounded parallelism, targeted cancellation, terminal
-/// completion fan-in, and one global write lane. Every admitted worker gets an
-/// independent dependency-injection scope through IWorkerSessionFactory.
+/// completion fan-in, and independent dependency-injection scopes. File tools
+/// serialize writes by canonical path rather than blocking unrelated workers here.
 /// </summary>
 public sealed class WorkerCoordinator : IAsyncDisposable
 {
@@ -32,7 +32,6 @@ public sealed class WorkerCoordinator : IAsyncDisposable
     private readonly Func<WorkerTaskId> _taskIdFactory;
     private readonly Func<WorkerId> _workerIdFactory;
     private readonly SemaphoreSlim _workerSlots;
-    private readonly SemaphoreSlim _writerGate = new(1, 1);
     private readonly ConcurrentDictionary<WorkerId, Registration> _workers = new();
     private readonly object _lifecycleGate = new();
     private readonly Channel<WorkerCompletion> _completions = Channel.CreateUnbounded<WorkerCompletion>(
@@ -72,6 +71,8 @@ public sealed class WorkerCoordinator : IAsyncDisposable
             return new WorkerStartResult.Rejected("Worker description must not be blank.");
         if (string.IsNullOrWhiteSpace(request.Prompt))
             return new WorkerStartResult.Rejected("Worker prompt must not be blank.");
+        if (!Enum.IsDefined(request.AccessMode))
+            return new WorkerStartResult.Rejected("Worker access mode is invalid.");
         if (request.MaxReportTokens is < 128 or > 4_000)
             return new WorkerStartResult.Rejected("Worker report limit must be between 128 and 4,000 tokens.");
 
@@ -192,23 +193,15 @@ public sealed class WorkerCoordinator : IAsyncDisposable
         await Task.WhenAll(registrations.Select(registration => registration.CompletionSource.Task));
         _completions.Writer.TryComplete();
         _workerSlots.Dispose();
-        _writerGate.Dispose();
     }
 
     private async Task ExecuteAsync(Registration registration)
     {
         var slotHeld = false;
-        var writerHeld = false;
         WorkerCompletion completion;
 
         try
         {
-            if (registration.Request.AccessMode == WorkerAccessMode.Write)
-            {
-                await _writerGate.WaitAsync(registration.Token);
-                writerHeld = true;
-            }
-
             await _workerSlots.WaitAsync(registration.Token);
             slotHeld = true;
 
@@ -251,8 +244,6 @@ public sealed class WorkerCoordinator : IAsyncDisposable
         }
         finally
         {
-            if (writerHeld)
-                _writerGate.Release();
             if (slotHeld)
                 _workerSlots.Release();
         }

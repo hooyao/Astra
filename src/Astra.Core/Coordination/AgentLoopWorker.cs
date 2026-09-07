@@ -1,4 +1,5 @@
 using Astra.Core.Compaction;
+using Astra.Core.Files;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Astra.Core.Coordination;
@@ -11,7 +12,8 @@ public sealed class AgentLoopWorker(
     [FromKeyedServices(AgentServiceKeys.WorkerLoop)] AgentLoop loop,
     UsageTrackingChatClient trackingClient,
     IChatTokenEstimator tokenEstimator,
-    TimeProvider timeProvider) : IWorker
+    TimeProvider timeProvider,
+    FileObservationStore fileObservations) : IWorker
 {
     public async Task<WorkerCompletion> RunAsync(
         WorkerTaskId taskId,
@@ -25,11 +27,18 @@ public sealed class AgentLoopWorker(
         try
         {
             Validate(request);
-            var prompt = WorkerReportProtocol.AddInstructions(request.Prompt, request.MaxReportTokens);
+            var prompt = WorkerReportProtocol.AddInstructions(
+                request.Prompt,
+                request.AccessMode,
+                request.MaxReportTokens);
 
             await foreach (var evt in loop.SubmitAsync(
                                prompt,
-                               new AgentTurnOptions { MaxOutputTokens = request.MaxReportTokens },
+                               new AgentTurnOptions
+                               {
+                                   MaxOutputTokens = request.MaxReportTokens,
+                                   ReadOnlyTools = request.AccessMode == WorkerAccessMode.ReadOnly,
+                               },
                                ct))
             {
                 if (evt is AgentEvent.ToolUse)
@@ -45,7 +54,13 @@ public sealed class AgentLoopWorker(
                     out var report,
                     out var failure))
             {
-                return Failed(taskId, workerId, request, usage, failure!);
+                return Failed(
+                    taskId,
+                    workerId,
+                    request,
+                    usage,
+                    failure!,
+                    fileObservations.SnapshotChangedPaths());
             }
 
             return new WorkerCompletion(
@@ -56,7 +71,7 @@ public sealed class AgentLoopWorker(
                 report,
                 usage,
                 Failure: null,
-                ChangedPaths: [],
+                ChangedPaths: fileObservations.SnapshotChangedPaths(),
                 Artifacts: []);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -69,7 +84,7 @@ public sealed class AgentLoopWorker(
                 Report: null,
                 trackingClient.Snapshot(toolCalls, ElapsedMilliseconds(started)),
                 Failure: null,
-                ChangedPaths: [],
+                ChangedPaths: fileObservations.SnapshotChangedPaths(),
                 Artifacts: []);
         }
         catch (Exception ex)
@@ -82,7 +97,8 @@ public sealed class AgentLoopWorker(
                 new WorkerFailure(
                     "worker_execution_failed",
                     BoundFailureMessage(ex.Message),
-                    Retryable: false));
+                    Retryable: false),
+                fileObservations.SnapshotChangedPaths());
         }
     }
 
@@ -103,7 +119,8 @@ public sealed class AgentLoopWorker(
         WorkerId workerId,
         WorkerRequest request,
         WorkerUsage usage,
-        WorkerFailure failure) =>
+        WorkerFailure failure,
+        IReadOnlyList<string> changedPaths) =>
         new(
             taskId,
             workerId,
@@ -112,7 +129,7 @@ public sealed class AgentLoopWorker(
             Report: null,
             usage,
             failure,
-            ChangedPaths: [],
+            ChangedPaths: changedPaths,
             Artifacts: []);
 
     private long ElapsedMilliseconds(long started) =>
