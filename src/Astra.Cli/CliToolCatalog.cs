@@ -17,13 +17,13 @@ internal sealed class CliToolCatalog
             ReadFileTool.CreateDefinition(fileSystem),
             GlobTool.CreateDefinition(fileSystem),
             GrepTool.CreateDefinition(fileSystem),
+            WriteFileTool.CreateDefinition(fileSystem),
+            EditFileTool.CreateDefinition(fileSystem),
         ];
         CoordinatorDefinitions =
         [
             .. WorkerDefinitions,
             AgentTool.Definition,
-            WriteFileTool.CreateDefinition(fileSystem),
-            EditFileTool.CreateDefinition(fileSystem),
             PowerShellTool.CreateDefinition(fileSystem.BaseDirectory),
         ];
     }

@@ -10,6 +10,8 @@ public sealed class FileToolsTests : IDisposable
         Path.GetTempPath(),
         $"AstraFileToolsTests-{Guid.NewGuid():N}");
     private readonly WorkspaceFileSystem _fileSystem;
+    private readonly FileObservationStore _observations = new();
+    private readonly FileWriteCoordinator _writeCoordinator = new();
 
     public FileToolsTests()
     {
@@ -29,7 +31,7 @@ public sealed class FileToolsTests : IDisposable
         try
         {
             var fileSystem = new WorkspaceFileSystem(_root);
-            var write = new WriteFileTool(fileSystem);
+            var write = new WriteFileTool(fileSystem, _observations, _writeCoordinator);
 
             await ExecuteAsync(write, new Dictionary<string, object?>
             {
@@ -61,7 +63,7 @@ public sealed class FileToolsTests : IDisposable
         try
         {
             var fileSystem = new WorkspaceFileSystem(_root, [_root, secondRoot]);
-            var write = new WriteFileTool(fileSystem);
+            var write = new WriteFileTool(fileSystem, _observations, _writeCoordinator);
             var allowed = Path.Combine(secondRoot, "allowed.txt");
             var denied = Path.Combine(thirdRoot, "denied.txt");
 
@@ -95,7 +97,7 @@ public sealed class FileToolsTests : IDisposable
         await File.WriteAllTextAsync(
             Path.Combine(_root, "sample.txt"),
             "line-1\nline-2\nline-3\nline-4");
-        var tool = new ReadFileTool(_fileSystem);
+        var tool = new ReadFileTool(_fileSystem, _observations);
 
         var result = await ExecuteAsync(tool, new Dictionary<string, object?>
         {
@@ -121,7 +123,7 @@ public sealed class FileToolsTests : IDisposable
         var path = Path.Combine(_root, "newlines.txt");
         var original = $"line-1{newline}line-2{newline}line-3{newline}line-4";
         await File.WriteAllTextAsync(path, original, new UTF8Encoding(false));
-        var tool = new ReadFileTool(_fileSystem);
+        var tool = new ReadFileTool(_fileSystem, _observations);
 
         var result = await ExecuteAsync(tool, new Dictionary<string, object?>
         {
@@ -136,7 +138,7 @@ public sealed class FileToolsTests : IDisposable
     [Fact]
     public async Task WriteFile_CreatesParentDirectories_AndOverwritesCompleteContent()
     {
-        var tool = new WriteFileTool(_fileSystem);
+        var tool = new WriteFileTool(_fileSystem, _observations, _writeCoordinator);
         var path = Path.Combine(_root, "nested", "created.txt");
 
         await ExecuteAsync(tool, new Dictionary<string, object?>
@@ -162,7 +164,8 @@ public sealed class FileToolsTests : IDisposable
     {
         var path = Path.Combine(_root, "edit.txt");
         await File.WriteAllTextAsync(path, "alpha beta beta");
-        var tool = new EditFileTool(_fileSystem);
+        await ObserveAsync("edit.txt");
+        var tool = new EditFileTool(_fileSystem, _observations, _writeCoordinator);
 
         await ExecuteAsync(tool, new Dictionary<string, object?>
         {
@@ -197,6 +200,8 @@ public sealed class FileToolsTests : IDisposable
     [InlineData("\n", true)]
     [InlineData("\r\n", false)]
     [InlineData("\r\n", true)]
+    [InlineData("\r", false)]
+    [InlineData("\r", true)]
     public async Task EditFile_PreservesLineTerminators_AndUtf8Bom(
         string newline,
         bool withBom)
@@ -204,7 +209,8 @@ public sealed class FileToolsTests : IDisposable
         var path = Path.Combine(_root, "preserve-format.txt");
         var original = $"before{newline}hello world{newline}after{newline}";
         await WriteUtf8Async(path, original, withBom);
-        var tool = new EditFileTool(_fileSystem);
+        await ObserveAsync("preserve-format.txt");
+        var tool = new EditFileTool(_fileSystem, _observations, _writeCoordinator);
 
         await ExecuteAsync(tool, new Dictionary<string, object?>
         {
@@ -212,9 +218,15 @@ public sealed class FileToolsTests : IDisposable
             ["old_string"] = $"before{newline}hello world{newline}after",
             ["new_string"] = $"before{newline}hello astra{newline}after",
         });
+        await ExecuteAsync(tool, new Dictionary<string, object?>
+        {
+            ["file_path"] = "preserve-format.txt",
+            ["old_string"] = "hello astra",
+            ["new_string"] = "hello beta",
+        });
 
         var actual = await File.ReadAllBytesAsync(path);
-        var expectedText = $"before{newline}hello astra{newline}after{newline}";
+        var expectedText = $"before{newline}hello beta{newline}after{newline}";
         Assert.Equal(Utf8Bytes(expectedText, withBom), actual);
     }
 
@@ -223,7 +235,8 @@ public sealed class FileToolsTests : IDisposable
     {
         var path = Path.Combine(_root, "whitespace.txt");
         await File.WriteAllTextAsync(path, "left    right");
-        var tool = new EditFileTool(_fileSystem);
+        await ObserveAsync("whitespace.txt");
+        var tool = new EditFileTool(_fileSystem, _observations, _writeCoordinator);
 
         await ExecuteAsync(tool, new Dictionary<string, object?>
         {
@@ -233,6 +246,21 @@ public sealed class FileToolsTests : IDisposable
         });
 
         Assert.Equal("left\tright", await File.ReadAllTextAsync(path));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReadFile_RejectsInvalidUtf8WithOrWithoutBom(bool withBom)
+    {
+        var path = Path.Combine(_root, "invalid-utf8.txt");
+        byte[] original = [.. Utf8Bytes("hello world\n", withBom), 0xff];
+        await File.WriteAllBytesAsync(path, original);
+
+        await Assert.ThrowsAsync<DecoderFallbackException>(
+            () => ObserveAsync("invalid-utf8.txt"));
+
+        Assert.Equal(original, await File.ReadAllBytesAsync(path));
     }
 
     [Fact]
@@ -388,8 +416,8 @@ public sealed class FileToolsTests : IDisposable
     [Fact]
     public async Task FileTools_RejectLexicalWorkspaceEscape()
     {
-        var read = new ReadFileTool(_fileSystem);
-        var write = new WriteFileTool(_fileSystem);
+        var read = new ReadFileTool(_fileSystem, _observations);
+        var write = new WriteFileTool(_fileSystem, _observations, _writeCoordinator);
         var outside = Path.Combine(_root, "..", $"outside-{Guid.NewGuid():N}.txt");
 
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
@@ -425,7 +453,7 @@ public sealed class FileToolsTests : IDisposable
                 return;
             }
 
-            var read = new ReadFileTool(_fileSystem);
+            var read = new ReadFileTool(_fileSystem, _observations);
             await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
                 ExecuteAsync(read, new Dictionary<string, object?>
                 {
@@ -459,6 +487,11 @@ public sealed class FileToolsTests : IDisposable
 
         return Assert.IsType<ToolOutput.Result>(Assert.Single(outputs)).Text;
     }
+
+    private Task<string> ObserveAsync(string path) =>
+        ExecuteAsync(
+            new ReadFileTool(_fileSystem, _observations),
+            new Dictionary<string, object?> { ["file_path"] = path });
 
     private static string ExtractReadPayload(string result)
     {

@@ -6,9 +6,16 @@ namespace Astra.Core.Coordination;
 
 internal static class WorkerReportProtocol
 {
-    public static string AddInstructions(string prompt, int maxReportTokens) =>
+    public static string AddInstructions(
+        string prompt,
+        WorkerAccessMode accessMode,
+        int maxReportTokens) =>
         $$"""
         {{prompt}}
+
+        <worker-access-mode>
+        {{AccessInstructions(accessMode)}}
+        </worker-access-mode>
 
         <worker-report-contract>
         When the task is complete, your final response must be only one JSON object.
@@ -31,6 +38,17 @@ internal static class WorkerReportProtocol
         complete files, or intermediate reasoning.
         </worker-report-contract>
         """;
+
+    private static string AccessInstructions(WorkerAccessMode accessMode) =>
+        accessMode switch
+        {
+            WorkerAccessMode.ReadOnly =>
+                "This worker is read-only. Do not modify files or invoke write-class tools.",
+            WorkerAccessMode.Write =>
+                "This worker may use Edit and Write for the assigned task. Read every existing file before changing it, " +
+                "and avoid files assigned to another worker.",
+            _ => throw new ArgumentOutOfRangeException(nameof(accessMode)),
+        };
 
     public static bool TryParse(
         string text,

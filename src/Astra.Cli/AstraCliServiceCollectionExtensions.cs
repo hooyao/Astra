@@ -50,6 +50,8 @@ public static class AstraCliServiceCollectionExtensions
         services.AddSingleton<TimeProvider>(TimeProvider.System);
         services.AddSingleton<IChatTokenEstimator, RoughChatTokenEstimator>();
         services.AddSingleton<WorkspaceFileSystem>();
+        services.AddSingleton<FileWriteCoordinator>();
+        services.AddScoped<FileObservationStore>();
         services.AddSingleton<CliToolCatalog>();
 
         // Every coordinator/worker scope owns a separate provider client. The
